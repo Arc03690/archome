@@ -1,0 +1,1301 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Желе Мания — claw machine</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1a1030;
+    font-family:'Segoe UI',Arial,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+  #hud{position:fixed;top:calc(8px + env(safe-area-inset-top));left:0;right:0;display:flex;justify-content:center;gap:20px;
+    color:#fff;font-size:20px;font-weight:700;text-shadow:0 2px 4px #000;pointer-events:none;z-index:5}
+  #combo{color:#ff9f43;min-width:70px}
+  #powers{position:fixed;top:44px;left:0;right:0;text-align:center;color:#7bed9f;font-size:18px;
+    font-weight:700;text-shadow:0 2px 4px #000;pointer-events:none;z-index:5;min-height:24px}
+  #msg{position:fixed;top:74px;left:0;right:0;text-align:center;color:#ffe66d;font-size:22px;
+    font-weight:700;text-shadow:0 2px 6px #000;pointer-events:none;z-index:5;opacity:0;transition:opacity .3s}
+  #hint{position:fixed;bottom:calc(110px + env(safe-area-inset-bottom));left:0;right:0;text-align:center;
+    color:#ffffff99;font-size:14px;text-shadow:0 1px 3px #000;pointer-events:none;z-index:5;transition:opacity .6s}
+  .pop{position:fixed;color:#ffd700;font-weight:800;font-size:20px;text-shadow:0 2px 4px #000;
+    pointer-events:none;z-index:4;animation:popfly .9s ease-out forwards;transform:translate(-50%,-50%)}
+  @keyframes popfly{ 0%{opacity:0;transform:translate(-50%,-50%) scale(.6)}
+    20%{opacity:1} 100%{opacity:0;transform:translate(-50%,-150%) scale(1.3)} }
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:8;transition:opacity .5s}
+
+  #controls{position:fixed;bottom:calc(14px + env(safe-area-inset-bottom));left:14px;right:14px;
+    display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none;z-index:5}
+  #controls .btn{pointer-events:auto}
+  .btn{border-radius:50%;border:2px solid #ffffff55;background:#ffffff22;color:#fff;
+    display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);cursor:pointer;
+    box-shadow:0 2px 8px #0006}
+  .btn:active{background:#ffffff55;transform:scale(.93)}
+  #pad{display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(2,44px);gap:6px}
+  #pad .btn{width:44px;height:44px;font-size:18px}
+  #drop{width:78px;height:78px;background:#e63946cc;border-color:#ff6b6b;font-size:13px;
+    font-weight:800;letter-spacing:.5px}
+  #reset,#menu,#snd{position:fixed;top:calc(8px + env(safe-area-inset-top));width:44px;height:44px;font-size:18px;z-index:6}
+  #reset{right:12px}
+  #snd{right:64px}
+  #menu{left:12px}
+
+  @media (orientation: landscape) and (max-height: 560px){
+    #controls{display:none}
+    #hint{display:block;bottom:calc(14px + env(safe-area-inset-bottom));font-size:15px}
+    #hud{font-size:16px}
+    #powers{top:36px;font-size:14px}
+    #msg{top:60px;font-size:18px}
+    #reset,#menu,#snd{width:40px;height:40px;font-size:16px}
+    #snd{right:58px}
+  }
+  @media (max-width: 480px) and (orientation: portrait){
+    #hud{font-size:16px;gap:14px}
+    #powers{font-size:14px}
+    #msg{font-size:18px}
+  }
+
+  #start{position:fixed;inset:0;background:#1a1030ee;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;z-index:10;color:#fff;text-align:center;padding:16px;overflow:auto}
+  #start h1{font-size:30px;margin:0 0 4px;color:#ff9ff3;text-shadow:0 0 18px #ff9ff388}
+  #coinsBig{font-size:20px;color:#ffd700;font-weight:800;margin-bottom:4px}
+  #equipInfo{font-size:13px;color:#7bed9f;min-height:18px;margin-bottom:8px}
+  #modes{display:flex;flex-direction:column;gap:8px;width:min(340px,90vw)}
+  .modeBtn{padding:10px 14px;border:2px solid #ffffff33;border-radius:14px;background:#ffffff14;
+    color:#fff;font-size:15px;font-weight:700;cursor:pointer;text-align:left}
+  .modeBtn.sel{border-color:#ff6b6b;background:#e6394633;box-shadow:0 0 14px #e6394655}
+  .modeBtn small{display:block;font-weight:400;color:#ffffff99;font-size:12px;margin-top:2px}
+  .modeBtn .mult{float:right;color:#ffd700}
+  #shopBtn{margin-top:12px;padding:12px 36px;font-size:17px;font-weight:800;border:0;
+    border-radius:30px;background:#2d9cdb;color:#fff;cursor:pointer}
+  #goBtn{margin-top:8px;padding:14px 54px;font-size:20px;font-weight:800;border:0;
+    border-radius:40px;background:#e63946;color:#fff;cursor:pointer;box-shadow:0 0 20px #e6394688}
+  #goBtn:active,#shopBtn:active{transform:scale(.95)}
+  #powersInfo{margin-top:14px;font-size:13px;color:#ffffffaa;max-width:460px;line-height:1.5}
+
+  #over{position:fixed;inset:0;background:#0d0820f2;display:none;flex-direction:column;
+    align-items:center;justify-content:center;z-index:15;color:#fff;text-align:center;padding:16px;overflow:auto}
+  #over h1{font-size:38px;margin:0 0 6px;color:#ff6b6b;text-shadow:0 0 24px #ff6b6b88}
+  #newRec{display:none;color:#ffd700;font-weight:800;font-size:20px;margin-bottom:8px;
+    text-shadow:0 0 14px #ffd700;animation:recPulse 1s ease-in-out infinite}
+  @keyframes recPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+  .ovRow{font-size:19px;margin:4px 0;min-width:230px;display:flex;justify-content:space-between;gap:24px;
+    background:#ffffff10;border-radius:12px;padding:8px 16px}
+  .ovRow b{color:#ffd700}
+  #ovButtons{display:flex;gap:12px;margin-top:18px}
+  #ovAgain{padding:14px 34px;font-size:19px;font-weight:800;border:0;border-radius:40px;
+    background:#e63946;color:#fff;cursor:pointer;box-shadow:0 0 18px #e6394688}
+  #ovMenu{padding:14px 34px;font-size:19px;font-weight:800;border:2px solid #ffffff55;
+    border-radius:40px;background:transparent;color:#fff;cursor:pointer}
+  #ovAgain:active,#ovMenu:active{transform:scale(.95)}
+  @media (max-height: 560px){
+    #over h1{font-size:28px}
+    .ovRow{font-size:15px;padding:5px 12px;min-width:200px}
+    #ovAgain,#ovMenu{padding:10px 24px;font-size:15px}
+  }
+
+  #shop{position:fixed;inset:0;background:#0d0820f2;display:none;flex-direction:column;
+    align-items:center;z-index:20;color:#fff;overflow:auto;padding:16px}
+  #shop h2{color:#ffd700;margin:8px 0 2px}
+  #shopCoins{color:#ffd700;font-weight:800;margin-bottom:8px}
+  #shopTabs{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:10px}
+  .tabBtn{padding:8px 14px;border:2px solid #ffffff33;border-radius:20px;background:#ffffff14;
+    color:#fff;font-size:13px;font-weight:700;cursor:pointer}
+  .tabBtn.sel{border-color:#ffd700;background:#ffd70022;color:#ffd700}
+  .shopItem{display:flex;align-items:center;gap:12px;width:min(460px,94vw);
+    background:#ffffff10;border:1px solid #ffffff22;border-radius:14px;padding:10px 14px;margin-bottom:8px;text-align:left}
+  .shopItem .ico{font-size:28px;min-width:34px;text-align:center}
+  .shopItem .info{flex:1}
+  .shopItem .info b{display:block;font-size:15px}
+  .shopItem .info small{color:#ffffff99;font-size:12px;display:block}
+  .shopItem .acts{display:flex;gap:6px;align-items:center}
+  .shopItem button{padding:8px 12px;border:0;border-radius:20px;font-weight:800;cursor:pointer;
+    background:#e63946;color:#fff;font-size:13px;min-width:78px;white-space:nowrap}
+  .shopItem button:disabled{background:#555;cursor:default}
+  .shopItem button.owned{background:#27ae60}
+  .shopItem button.equip{background:#2d9cdb}
+  .shopItem button.equip.on{background:#8e2de2}
+  #closeShop{margin-top:10px;padding:10px 30px;font-size:16px;font-weight:800;border:0;
+    border-radius:30px;background:#8e2de2;color:#fff;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="hud">
+  <span>🍬 <b id="score">0</b></span>
+  <span id="combo"></span>
+  <span id="timeWrap" style="display:none">⏱ <b id="time">60</b></span>
+  <span>🪙 <b id="coins">0</b></span>
+</div>
+<div id="powers"></div>
+<div id="msg"></div>
+<div id="flash"></div>
+<div id="hint">Веди пальцем — клешня поедет. Хватать — кнопкой «ХВАТАТЬ»</div>
+<button class="btn" id="menu" title="Конец игры / меню">☰</button>
+<button class="btn" id="snd" title="Звук">🔊</button>
+<button class="btn" id="reset" title="Заново">↻</button>
+
+<div id="controls">
+  <div id="pad">
+    <span></span><button class="btn" data-k="up">▲</button><span></span>
+    <button class="btn" data-k="left">◀</button>
+    <button class="btn" data-k="grab" id="grabMini">◎</button>
+    <button class="btn" data-k="right">▶</button>
+    <span></span><button class="btn" data-k="down">▼</button><span></span>
+  </div>
+  <button class="btn" id="drop">ХВА-<br>ТАТЬ</button>
+</div>
+
+<!-- МЕНЮ -->
+<div id="start">
+  <h1>🟣 ЖЕЛЕ МАНИЯ</h1>
+  <div id="coinsBig">🪙 Монет: <b id="coinsMenu">0</b></div>
+  <div id="equipInfo"></div>
+  <div id="modes">
+    <button class="modeBtn sel" data-mode="classic">🎯 Классика <span class="mult">🪙×1</span>
+      <small data-best="classic">Бесконечная игра</small></button>
+    <button class="modeBtn" data-mode="timed">⏱ На время <span class="mult">🪙×2</span>
+      <small data-best="timed">60 секунд</small></button>
+    <button class="modeBtn" data-mode="crazy">🌀 Сумасшедшие желе <span class="mult">🪙×3</span>
+      <small data-best="crazy">Шарики плавают!</small></button>
+    <button class="modeBtn" data-mode="hard">💀 Хардкор <span class="mult">🪙×4</span>
+      <small data-best="hard">Узкий захват</small></button>
+  </div>
+  <button id="shopBtn">🛒 Магазин</button>
+  <button id="goBtn">Играть</button>
+  <div id="powersInfo">
+    Комбо растёт за каждый улов подряд — монет больше! Суперсилы: 🧲 Магнит · ⚡ Ускорение · 👯 Двойня · 💰 Сокровище.<br>
+    «☰» во время игры — завершить партию и увидеть итоги.
+  </div>
+</div>
+
+<!-- КОНЕЦ ИГРЫ -->
+<div id="over">
+  <h1>Игра окончена!</h1>
+  <div id="newRec">🏆 НОВЫЙ РЕКОРД!</div>
+  <div class="ovRow"><span>🍬 Шариков</span><b id="ovScore">0</b></div>
+  <div class="ovRow"><span>🪙 Заработано</span><b id="ovCoins">0</b></div>
+  <div class="ovRow"><span>🔥 Макс. комбо</span><b id="ovCombo">×1</b></div>
+  <div class="ovRow"><span>🏆 Рекорд режима</span><b id="ovBest">0</b></div>
+  <div id="ovButtons">
+    <button id="ovAgain">Заново</button>
+    <button id="ovMenu">В меню</button>
+  </div>
+</div>
+
+<!-- МАГАЗИН -->
+<div id="shop">
+  <h2>🛒 Магазин</h2>
+  <div id="shopCoins">🪙 Монет: <b id="coinsShop">0</b></div>
+  <div id="shopTabs">
+    <button class="tabBtn sel" data-tab="upg">⚙️ Улучшения</button>
+    <button class="tabBtn" data-tab="skins">🖌 Скины</button>
+    <button class="tabBtn" data-tab="body">🎨 Корпус</button>
+    <button class="tabBtn" data-tab="items">🎁 Бонусы</button>
+  </div>
+  <div id="shopList"></div>
+  <button id="closeShop">Закрыть</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+// ============================================================
+//  СОХРАНЕНИЕ
+// ============================================================
+const SAVE_KEY = 'claw_jelly_save_v3';
+let save;
+try { save = JSON.parse(localStorage.getItem(SAVE_KEY)) || null; } catch(e){ save = null; }
+if(!save || !save.upg) save = {
+  coins:0, snd:true,
+  upg:{radius:0,speed:0,luck:0,magnetDur:0,dive:0,time:0,wealth:0,combo:0},
+  skins:{owned:['classic'], cur:'classic'},
+  body:{owned:['classic'], cur:'classic'},
+  items:{magnet:0,speed:0,double:0,gold:0},
+  equip:{magnet:false,speed:false,double:false,gold:false},
+  best:{classic:0, timed:0, crazy:0, hard:0}
+};
+save.items = save.items || {magnet:0,speed:0,double:0,gold:0};
+save.equip = save.equip || {magnet:false,speed:false,double:false,gold:false};
+save.body  = save.body  || {owned:['classic'], cur:'classic'};
+if(!save.upg.magnetDur) save.upg.magnetDur=0;
+if(!save.upg.dive) save.upg.dive=0;
+if(!save.upg.time) save.upg.time=0;
+if(!save.upg.wealth) save.upg.wealth=0;
+if(!save.upg.combo) save.upg.combo=0;
+function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(e){} }
+
+// ============================================================
+//  КАТАЛОГИ
+// ============================================================
+const SKINS = {
+  classic:{name:'Золотая клешня', cost:0,    head:0xfeca57, tip:0xff6b6b, glow:0xffd6f5},
+  ice:    {name:'Ледяная',        cost:100,  head:0x74b9ff, tip:0xa8e6ff, glow:0x88ccff},
+  lava:   {name:'Лавовая',        cost:250,  head:0xe17055, tip:0xffb142, glow:0xff8844},
+  neon:   {name:'Неон',           cost:500,  head:0xa55eea, tip:0x00ffc8, glow:0xc56cf0},
+  toxic:  {name:'Токсик',         cost:800,  head:0x00b894, tip:0x55efc4, glow:0x00d2a0},
+  rainbow:{name:'Радуга',         cost:1500, head:0xff793f, tip:0xffffff, glow:0xffd700, animated:true}
+};
+const BODY_THEMES = {
+  classic:{name:'Фиолетовый клуб', cost:0,   frame:0x8e2de2, floor:0x3a1f6e, wall:0x2b1656},
+  ocean:  {name:'Океан',           cost:150,  frame:0x0a79d9, floor:0x0a2a5e, wall:0x142850},
+  candy:  {name:'Сладкая вата',    cost:400,  frame:0xff6b81, floor:0x5e2050, wall:0x441244},
+  dark:   {name:'Полночь',         cost:800,  frame:0x2d3436, floor:0x0d0d1a, wall:0x161622}
+};
+const UPGRADES = [
+  {key:'radius', ico:'🎯', name:'Шире захват', max:3,
+   desc:lvl=>'Радиус захвата +'+(lvl*0.25).toFixed(2), cost:lvl=>[40,110,260][lvl]},
+  {key:'speed',  ico:'💨', name:'Быстрее клешня', max:3,
+   desc:lvl=>'Скорость ×'+(1+lvl*0.25).toFixed(2), cost:lvl=>[40,110,260][lvl]},
+  {key:'luck',   ico:'🍀', name:'Шанс супершариков', max:3,
+   desc:lvl=>'Супершариков: '+Math.round((0.22+lvl*0.08)*100)+'%', cost:lvl=>[60,160,360][lvl]},
+  {key:'magnetDur', ico:'🧲', name:'Долгий магнит', max:3,
+   desc:lvl=>'Магнит: '+(15+lvl*5)+' сек', cost:lvl=>[50,140,320][lvl]},
+  {key:'dive',   ico:'⬇️', name:'Проворный трос', max:3,
+   desc:lvl=>'Спуск и подъём ×'+(1+lvl*0.25).toFixed(2), cost:lvl=>[50,130,300][lvl]},
+  {key:'time',   ico:'⏱', name:'Больше времени', max:3,
+   desc:lvl=>'На время: '+(60+lvl*10)+' сек', cost:lvl=>[60,150,350][lvl]},
+  {key:'wealth', ico:'🪙', name:'Щедрость', max:3,
+   desc:lvl=>'Монет +'+(lvl*10)+'%', cost:lvl=>[80,200,450][lvl]},
+  {key:'combo',  ico:'🔥', name:'Дольше комбо', max:3,
+   desc:lvl=>'Комбо живёт '+(6+lvl*2)+' сек', cost:lvl=>[60,150,350][lvl]}
+];
+const CONSUMABLES = [
+  {key:'magnet', ico:'🧲', name:'Заряд магнита',   desc:'Магнит в начале партии',        cost:30},
+  {key:'speed',  ico:'⚡', name:'Заряд ускорения', desc:'Ускорение в начале партии',     cost:30},
+  {key:'double', ico:'👯', name:'Заряд двойни',    desc:'Двойня в начале партии',        cost:25},
+  {key:'gold',   ico:'💰', name:'Золотой куш',     desc:'+25 монет при старте',          cost:50}
+];
+
+const MODES = {
+  classic:{mult:1, time:0, drift:false, radiusK:1.0, luckK:1.0, label:'Классика'},
+  timed:  {mult:2, time:60, drift:false, radiusK:1.0, luckK:1.2, label:'На время'},
+  crazy:  {mult:3, time:0, drift:true,  radiusK:1.1, luckK:1.4, label:'Сумашедшие желе'},
+  hard:   {mult:4, time:0, drift:false, radiusK:0.7, luckK:0.45, label:'Хардкор'}
+};
+let currentMode = 'classic';
+let mode = MODES[currentMode];
+
+// ============================================================
+//  ЗВУК
+// ============================================================
+const AC = { ctx:null, on:!!save.snd };
+function initAudio(){
+  if(AC.ctx) return;
+  try { AC.ctx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e){}
+}
+function tone(freq, t0, dur, type, vol){
+  if(!AC.ctx) return;
+  const o=AC.ctx.createOscillator(), g=AC.ctx.createGain();
+  o.type=type||'sine'; o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(vol||.08, t0);
+  g.gain.exponentialRampToValueAtTime(.001, t0+dur);
+  o.connect(g); g.connect(AC.ctx.destination);
+  o.start(t0); o.stop(t0+dur);
+}
+function sfx(kind, arg){
+  if(!AC.on || !AC.ctx) return;
+  const t = AC.ctx.currentTime;
+  switch(kind){
+    case 'down': {
+      const o=AC.ctx.createOscillator(), g=AC.ctx.createGain();
+      o.type='sawtooth';
+      o.frequency.setValueAtTime(300,t);
+      o.frequency.exponentialRampToValueAtTime(120,t+.65);
+      g.gain.setValueAtTime(.05,t);
+      g.gain.exponentialRampToValueAtTime(.001,t+.65);
+      o.connect(g); g.connect(AC.ctx.destination); o.start(t); o.stop(t+.65);
+      break;
+    }
+    case 'catch':
+      tone(660,t,.1,'square',.07); tone(880,t+.09,.14,'square',.07); break;
+    case 'miss':
+      tone(140,t,.2,'sawtooth',.06); tone(95,t+.12,.25,'sawtooth',.05); break;
+    case 'coin': {
+      const f = 900*Math.pow(1.12, Math.min(arg||0,10));
+      tone(f,t,.08,'sine',.09); tone(f*1.5,t+.06,.12,'sine',.08); break;
+    }
+    case 'power':
+      [523,659,784,1047].forEach((f,i)=>tone(f,t+i*.09,.18,'triangle',.09)); break;
+    case 'land':
+      tone(200,t,.12,'sine',.1); tone(120,t+.05,.16,'sine',.08); break;
+    case 'buy':
+      [784,988,1175].forEach((f,i)=>tone(f,t+i*.07,.15,'square',.06)); break;
+    case 'gameover':
+      [784,659,523,392].forEach((f,i)=>tone(f,t+i*.16,.3,'triangle',.09)); break;
+  }
+}
+
+// ============================================================
+//  СЦЕНА
+// ============================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1030);
+scene.fog = new THREE.Fog(0x1a1030, 20, 45);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, .1, 300);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbfaaff, 0x221144, .9));
+const dir = new THREE.DirectionalLight(0xffffff, .9);
+dir.position.set(5, 12, 6);
+scene.add(dir);
+const lamp = new THREE.PointLight(0xffd6f5, .8, 25);
+lamp.position.set(0, 8, 3);
+scene.add(lamp);
+const spot1 = new THREE.PointLight(0x4d96ff, .5, 40);
+const spot2 = new THREE.PointLight(0xff6b81, .5, 40);
+scene.add(spot1); scene.add(spot2);
+
+const starGeo = new THREE.BufferGeometry();
+{
+  const n=260, arr=new Float32Array(n*3);
+  for(let i=0;i<n;i++){
+    const r=45+Math.random()*35, th=Math.random()*6.283, ph=Math.random()*Math.PI;
+    arr[i*3]=r*Math.sin(ph)*Math.cos(th);
+    arr[i*3+1]=Math.abs(r*Math.cos(ph))+3;
+    arr[i*3+2]=r*Math.sin(ph)*Math.sin(th);
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(arr,3));
+}
+const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({color:0xbfaaff,size:.5,transparent:true,opacity:.7}));
+scene.add(stars);
+
+const W = 11, D = 8, H = 9;
+const frameMat = new THREE.MeshPhongMaterial({color:0x8e2de2, shininess:60});
+const glassMat = new THREE.MeshPhongMaterial({color:0x88ccff, transparent:true, opacity:.10, side:THREE.DoubleSide});
+const floorMat = new THREE.MeshPhongMaterial({color:0x3a1f6e});
+const wallMat  = new THREE.MeshPhongMaterial({color:0x2b1656, transparent:true, opacity:.7});
+
+function box(w,h,d,mat,x,y,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.position.set(x,y,z);scene.add(m);return m;}
+
+box(W, .4, D, floorMat, 0, .2, 0);
+box(W, H, .3, wallMat, 0, H/2, -D/2);
+box(.3, H, D, wallMat, -W/2, H/2, 0);
+box(.3, H, D, wallMat,  W/2, H/2, 0);
+box(W, H, .1, glassMat, 0, H/2, D/2);
+[[-W/2,-D/2],[W/2,-D/2],[-W/2,D/2],[W/2,D/2]].forEach(p=>box(.6,H,.6,frameMat,p[0],H/2,p[1]));
+box(W,.6,.6,frameMat,0,H,D/2); box(W,.6,.6,frameMat,0,H,-D/2);
+box(W,1.2,.8,frameMat,0,H+1.2,-D/2+.4);
+
+const ledMat = new THREE.MeshBasicMaterial({color:0x00ffc8});
+box(W, .12, .12, ledMat, 0, H+.15, D/2-.35);
+
+const signCanvas = document.createElement('canvas');
+signCanvas.width = 1024; signCanvas.height = 192;
+{
+  const g = signCanvas.getContext('2d');
+  g.fillStyle = '#241245'; g.fillRect(0,0,1024,192);
+  g.font = 'bold 130px Arial'; g.textAlign='center'; g.textBaseline='middle';
+  g.shadowColor = '#ff9ff3'; g.shadowBlur = 40;
+  g.fillStyle = '#ffe66d'; g.fillText('ЖЕЛЕ МАНИЯ', 512, 100);
+  g.shadowBlur = 0;
+  g.strokeStyle = '#ff9ff3'; g.lineWidth = 8; g.strokeText('ЖЕЛЕ МАНИЯ', 512, 100);
+}
+const signTex = new THREE.CanvasTexture(signCanvas);
+const signMat = new THREE.MeshBasicMaterial({map:signTex});
+const sign = new THREE.Mesh(new THREE.PlaneGeometry(W*.92, 1.0), signMat);
+sign.position.set(0, H+1.2, -D/2+.82);
+scene.add(sign);
+
+const CH = {x:4.2, z:2.6};
+box(2.6,.3,2.6,new THREE.MeshPhongMaterial({color:0x142850}),CH.x,.15,CH.z);
+box(2.6,2.2,.2,frameMat,CH.x,1.3,CH.z+1.3);
+box(.2,2.2,2.6,frameMat,CH.x+1.3,1.3,CH.z);
+const chuteRim = box(2.6,.9,.2,new THREE.MeshPhongMaterial({color:0xff6b6b, emissive:0x220000}),CH.x,2.6,CH.z-1.3);
+
+function applyBodyTheme(){
+  const t = BODY_THEMES[save.body.cur] || BODY_THEMES.classic;
+  frameMat.color.setHex(t.frame);
+  floorMat.color.setHex(t.floor);
+  wallMat.color.setHex(t.wall);
+}
+
+const POWER_DEFS = {
+  magnet: {msg:'🧲 МАГНИТ! Радиус захвата огромный', dur:15, color:0xff4d4d},
+  speed:  {msg:'⚡ УСКОРЕНИЕ! Клешня летает вдвое быстрее', dur:12, color:0xffd93d},
+  double: {msg:'👯 ДВОЙНЯ! Следующий захват возьмёт два шарика', dur:0, color:0x4d96ff},
+  gold:   {msg:'💰 СОКРОВИЩЕ! +10 монет!', dur:0, color:0xffd700}
+};
+const POWER_KEYS = Object.keys(POWER_DEFS);
+const powers = {magnet:0, speed:0, double:0};
+function magnetDur(){ return 15 + (save.upg.magnetDur||0)*5; }
+
+const BALL_R = .55;
+const colors = [0xff6b81,0xffd93d,0x6bff8f,0x4d96ff,0xff9ff3,0x7bed9f,0xffa502,0xa55eea];
+const balls = [];
+function powerChance(){
+  const base = 0.22 + (save.upg.luck||0)*0.08;
+  return Math.min(.6, base*mode.luckK);
+}
+function spawnBall(){
+  let x, z, ok, tries = 0;
+  do {
+    x = (Math.random()*2-1)*(W/2-1.4);
+    z = (Math.random()*2-1)*(D/2-1.4);
+    ok = Math.hypot(x-CH.x, z-CH.z) > 2.6;
+  } while(!ok && ++tries < 50);
+  if(!ok) return;
+  let y = BALL_R;
+  for(const b of balls){
+    if(b.userData.free && Math.hypot(b.position.x-x, b.position.z-z) < BALL_R*1.6 && b.position.y > y-BALL_R*.2)
+      y = Math.max(y, b.position.y+BALL_R*1.55);
+  }
+  const hasPower = Math.random() < powerChance();
+  const power = hasPower ? POWER_KEYS[Math.floor(Math.random()*POWER_KEYS.length)] : null;
+  const mat = new THREE.MeshPhongMaterial({
+    color: hasPower ? POWER_DEFS[power].color : colors[Math.floor(Math.random()*colors.length)],
+    shininess:120, specular:0xffffff, transparent:true, opacity:.85
+  });
+  if(hasPower) mat.emissive = new THREE.Color(POWER_DEFS[power].color).multiplyScalar(.55);
+  const m = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 18), mat);
+  m.position.set(x, y, z);
+  const u = {free:true, phase:Math.random()*6.28, power:power};
+  if(mode.drift){
+    const a = Math.random()*6.28;
+    u.dx = Math.cos(a)*.8; u.dz = Math.sin(a)*.8;
+  }
+  m.userData = u;
+  scene.add(m); balls.push(m);
+}
+
+const claw = new THREE.Group();
+scene.add(claw);
+const cable = new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,1,8),
+  new THREE.MeshPhongMaterial({color:0xcccccc}));
+claw.add(cable);
+const headMat = new THREE.MeshPhongMaterial({color:0xfeca57, shininess:80});
+const tipMat  = new THREE.MeshPhongMaterial({color:0xff6b6b});
+const head = new THREE.Mesh(new THREE.CylinderGeometry(.45,.6,.55,16), headMat);
+head.position.y = -.3;
+claw.add(head);
+const prongs = [];
+for(let i=0;i<3;i++){
+  const pivot = new THREE.Group();
+  pivot.rotation.y = i * Math.PI*2/3;
+  const armMat = new THREE.MeshPhongMaterial({color:0xfeca57});
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(.16,1.3,.16), armMat);
+  arm.position.y = -.75;
+  pivot.add(arm);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(.12,.35,10), tipMat);
+  tip.position.y = -1.45; tip.rotation.x = Math.PI;
+  pivot.add(tip);
+  claw.add(pivot);
+  prongs.push({pivot, armMat});
+}
+claw.position.set(0, H-.4, 0);
+const magnetLight = new THREE.PointLight(0xff4d4d, 0, 7);
+magnetLight.position.y = -1.5;
+claw.add(magnetLight);
+
+function applySkin(){
+  const s = SKINS[save.skins.cur] || SKINS.classic;
+  headMat.color.setHex(s.head);
+  tipMat.color.setHex(s.tip);
+  prongs.forEach(p=>p.armMat.color.setHex(s.head));
+  lamp.color.setHex(s.glow);
+}
+applySkin();
+applyBodyTheme();
+
+const marker = new THREE.Mesh(new THREE.RingGeometry(.5,.72,32),
+  new THREE.MeshBasicMaterial({color:0xffe66d, transparent:true, opacity:.55, side:THREE.DoubleSide}));
+marker.rotation.x = -Math.PI/2;
+marker.position.y = .42;
+scene.add(marker);
+const markerOuter = new THREE.Mesh(new THREE.RingGeometry(.9,1.0,40),
+  new THREE.MeshBasicMaterial({color:0xff4d4d, transparent:true, opacity:0, side:THREE.DoubleSide}));
+markerOuter.rotation.x = -Math.PI/2;
+markerOuter.position.y = .42;
+scene.add(markerOuter);
+
+const clawState = { x:0, z:-1, y:H-.4, open:1, phase:'idle', targets:[], t:0, sx:0, sz:0 };
+const LIM = {x:W/2-1, zMin:-D/2+.8, zMax:D/2-1};
+
+const PMAX = 240;
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(PMAX*3);
+const pCol = new Float32Array(PMAX*3);
+const parts = [];
+for(let i=0;i<PMAX;i++){ parts.push({life:0,vx:0,vy:0,vz:0}); pPos[i*3+1]=-100; }
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos,3));
+pGeo.setAttribute('color', new THREE.BufferAttribute(pCol,3));
+const pMat = new THREE.PointsMaterial({size:.3, vertexColors:true, transparent:true, opacity:.95, depthWrite:false});
+const points = new THREE.Points(pGeo, pMat);
+scene.add(points);
+function burst(x,y,z,hex,count,speed){
+  const c = new THREE.Color(hex);
+  let spawned=0;
+  for(let i=0;i<PMAX && spawned<count;i++){
+    const p = parts[i];
+    if(p.life>0) continue;
+    p.life = .6+Math.random()*.6;
+    pPos[i*3]=x; pPos[i*3+1]=y; pPos[i*3+2]=z;
+    const a=Math.random()*6.283;
+    const s2=(speed||4)*(.4+Math.random()*.6);
+    p.vx=Math.cos(a)*s2; p.vy=Math.abs(Math.sin(a))*s2*.8+2.5; p.vz=Math.sin(a)*s2;
+    pCol[i*3]=c.r; pCol[i*3+1]=c.g; pCol[i*3+2]=c.b;
+    spawned++;
+  }
+  pGeo.attributes.color.needsUpdate = true;
+}
+
+const _m = new THREE.Matrix4();
+const _v = new THREE.Vector3();
+const camBase = new THREE.Vector3(0,7.5,15);
+function fitCamera(){
+  const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+  const aspect = w/h;
+  const portrait = aspect < 0.95;
+  const lowLandscape = !portrait && h <= 560;
+
+  let fov, camY, lookY, topReserve, bottomReserve;
+  if(portrait){
+    fov = 75;
+    topReserve = Math.min(.30, 92/h);
+    bottomReserve = Math.min(.42, (h<=420 ? 60 : 104)/h);
+    camY = 7.5; lookY = 4.3;
+  } else if(lowLandscape){
+    fov = 60; topReserve = 0.05; bottomReserve = 0.012;
+    camY = 6.3; lookY = 5.0;
+  } else {
+    fov = 55;
+    topReserve = Math.min(.30, 92/h);
+    bottomReserve = Math.min(.42, 104/h);
+    camY = 7.2; lookY = 4.5;
+  }
+
+  camera.fov = fov;
+  camera.aspect = aspect;
+
+  const halfV = THREE.MathUtils.degToRad(camera.fov/2);
+  const halfH = Math.atan(Math.tan(halfV)*aspect);
+  const topTan  = Math.tan(halfV*(1 - 2*topReserve));
+  const botTan  = Math.tan(halfV*(1 - 2*bottomReserve));
+  const sideTan = Math.tan(halfH)*0.99;
+
+  const corners = [
+    [-6.4, 0, 4.8],[6.4, 0, 4.8],[-6.4, 0, -4.8],[6.4, 0, -4.8],
+    [-6.4, 11.5, 4.8],[6.4, 11.5, 4.8],[-6.4, 11.5, -4.8],[6.4, 11.5, -4.8]
+  ];
+
+  let lo = 4, hi = 150;
+  for(let it=0; it<40 && hi-lo>0.01; it++){
+    const Z = (lo+hi)/2;
+    camera.position.set(0, camY, Z);
+    camera.lookAt(0, lookY, 0);
+    camera.updateMatrixWorld(true);
+    _m.copy(camera.matrixWorld).invert();
+    let ok = true;
+    for(const c of corners){
+      _v.set(c[0],c[1],c[2]).applyMatrix4(_m);
+      if(_v.z > -0.05){ ok=false; break; }
+      const depth = -_v.z;
+      if(Math.abs(_v.x)/depth > sideTan){ ok=false; break; }
+      const t = _v.y/depth;
+      if(t > topTan || -t > botTan){ ok=false; break; }
+    }
+    if(ok) hi = Z; else lo = Z;
+  }
+  camBase.set(0, camY, (lo+hi)/2);
+  camera.position.copy(camBase);
+  camera.lookAt(0, lookY, 0);
+  camera.updateProjectionMatrix();
+}
+fitCamera();
+
+// ============================================================
+//  HUD, МЕНЮ
+// ============================================================
+const msgEl = document.getElementById('msg');
+const powersEl = document.getElementById('powers');
+const hintEl = document.getElementById('hint');
+const scoreEl = document.getElementById('score');
+const coinsEl = document.getElementById('coins');
+const coinsMenuEl = document.getElementById('coinsMenu');
+const coinsShopEl = document.getElementById('coinsShop');
+const timeWrap = document.getElementById('timeWrap');
+const timeEl = document.getElementById('time');
+const comboEl = document.getElementById('combo');
+const flashEl = document.getElementById('flash');
+const overEl = document.getElementById('over');
+const equipInfoEl = document.getElementById('equipInfo');
+
+function showMsg(t){ msgEl.textContent = t; msgEl.style.opacity = t?1:0; }
+function updateCoins(){
+  coinsEl.textContent = save.coins;
+  coinsMenuEl.textContent = save.coins;
+  coinsShopEl.textContent = save.coins;
+}
+function updatePowersHUD(){
+  const parts2 = [];
+  if(powers.magnet>0) parts2.push('🧲 '+Math.ceil(powers.magnet));
+  if(powers.speed>0)  parts2.push('⚡ '+Math.ceil(powers.speed));
+  if(powers.double>0) parts2.push('👯 готова!');
+  powersEl.textContent = parts2.join('   ');
+}
+function updateComboHUD(){
+  comboEl.textContent = combo>1 ? '🔥 ×'+comboMult() : '';
+}
+function updateEquipInfo(){
+  const on = CONSUMABLES.filter(c=>save.equip[c.key] && save.items[c.key]>0);
+  if(!on.length){ equipInfoEl.textContent = ''; return; }
+  const left = on.map(c=>c.ico+(save.items[c.key]>1?'×'+save.items[c.key]:'')).join('  ');
+  equipInfoEl.textContent = '🎁 На партию: '+left;
+}
+function refreshMenuBests(){
+  document.querySelectorAll('[data-best]').forEach(el=>{
+    const m = el.dataset.best;
+    const bonus = (m==='timed' && save.upg.time>0) ? ' · +'+(save.upg.time*10)+'с' : '';
+    el.textContent = MODES[m].label + ' · рекорд: ' + (save.best[m]||0) + ' 🍬' + bonus;
+  });
+}
+function popupAt(worldPos, text){
+  const v = worldPos.clone().project(camera);
+  const el = document.createElement('div');
+  el.className = 'pop';
+  el.textContent = text;
+  el.style.left = ((v.x*.5+.5)*100)+'%';
+  el.style.top = ((-v.y*.5+.5)*100)+'%';
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), 950);
+}
+function flash(){
+  flashEl.style.opacity = .45;
+  setTimeout(()=>{ flashEl.style.opacity = 0; }, 80);
+}
+
+let score = 0, playing = false, timeLeft = 0;
+let combo = 0, comboT = 0, ending = false;
+let runCoins = 0, maxCombo = 1;
+function comboMult(){ return Math.min(5, 1+Math.floor(combo/2)); }
+function wealthMult(){ return 1 + (save.upg.wealth||0)*0.10; }
+function diveSpeed(){ return 5*(1+(save.upg.dive||0)*0.25); }
+
+const startEl = document.getElementById('start');
+const shopEl = document.getElementById('shop');
+
+document.querySelectorAll('.modeBtn').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.modeBtn').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel');
+    currentMode = b.dataset.mode;
+    mode = MODES[currentMode];
+  });
+});
+
+document.getElementById('goBtn').addEventListener('click', ()=>{
+  initAudio();
+  startEl.style.display='none';
+  overEl.style.display='none';
+  startRun();
+});
+document.getElementById('shopBtn').addEventListener('click', ()=>{
+  refreshMenuBests();
+  renderShop();
+  shopEl.style.display='flex';
+});
+document.getElementById('closeShop').addEventListener('click', ()=>{
+  shopEl.style.display='none';
+  updateEquipInfo();
+});
+document.getElementById('menu').addEventListener('click', ()=>{
+  if(playing){ showGameOver(); return; }
+  refreshMenuBests();
+  updateCoins();
+  updateEquipInfo();
+  startEl.style.display='flex';
+  document.getElementById('goBtn').textContent = 'Играть';
+});
+
+const sndBtn = document.getElementById('snd');
+function updateSndBtn(){ sndBtn.textContent = AC.on ? '🔊' : '🔇'; }
+updateSndBtn();
+sndBtn.addEventListener('click', ()=>{
+  AC.on = !AC.on;
+  save.snd = AC.on; persist();
+  updateSndBtn();
+  if(AC.on){ initAudio(); sfx('coin',0); }
+});
+
+function startRun(){
+  score = 0; scoreEl.textContent = 0;
+  combo = 0; comboT = 0; updateComboHUD();
+  runCoins = 0; maxCombo = 1;
+  ending = false;
+  powers.magnet = 0; powers.speed = 0; powers.double = 0;
+  for(let i=balls.length-1;i>=0;i--){ scene.remove(balls[i]); }
+  balls.length = 0;
+  for(let i=0;i<22;i++) spawnBall();
+  clawState.phase='idle'; clawState.targets=[]; clawState.x=0; clawState.z=-1; clawState.y=H-.4;
+  if(mode.time>0){
+    timeLeft = mode.time + (save.upg.time||0)*10;
+    timeWrap.style.display='inline';
+    timeEl.textContent = timeLeft;
+  } else timeWrap.style.display='none';
+
+  let usedAny = false;
+  CONSUMABLES.forEach(c=>{
+    if(save.equip[c.key] && save.items[c.key]>0){
+      save.items[c.key]--;
+      usedAny = true;
+      if(c.key==='magnet'){ powers.magnet = magnetDur(); }
+      if(c.key==='speed'){ powers.speed = 12; }
+      if(c.key==='double'){ powers.double = 1; }
+      if(c.key==='gold'){ addCoins(25); runCoins += 25; }
+      if(save.items[c.key]<=0) save.equip[c.key] = false;
+    }
+  });
+  if(usedAny){ persist(); updateEquipInfo(); showMsg('Бонусы активированы! 🎁'); }
+
+  playing = true;
+  hintEl.style.opacity = 1;
+  hintEl.textContent = (innerWidth/innerHeight < 0.95)
+    ? 'Веди пальцем — клешня поедет. Хватать — кнопкой «ХВАТАТЬ»'
+    : 'Веди пальцем — клешня поедет. Двойной тап — «ХВАТАТЬ»';
+  setTimeout(()=>{ hintEl.style.opacity = 0; }, 7000);
+}
+
+document.getElementById('reset').addEventListener('click', ()=>{
+  if(!playing) return;
+  startRun();
+  showMsg('Заново! 🍬');
+});
+
+function showGameOver(){
+  if(!playing) return;
+  playing = false;
+  ending = false;
+  const isRecord = score > (save.best[currentMode]||0);
+  if(isRecord){ save.best[currentMode] = score; persist(); }
+  document.getElementById('ovScore').textContent = score;
+  document.getElementById('ovCoins').textContent = '+'+runCoins+' 🪙';
+  document.getElementById('ovCombo').textContent = '×'+maxCombo;
+  document.getElementById('ovBest').textContent = save.best[currentMode]+' 🍬';
+  document.getElementById('newRec').style.display = (isRecord && score>0) ? 'block' : 'none';
+  overEl.style.display='flex';
+  refreshMenuBests();
+  updateCoins();
+  sfx('gameover');
+  if(isRecord && score>0) flash();
+}
+document.getElementById('ovAgain').addEventListener('click', ()=>{
+  overEl.style.display='none';
+  startRun();
+});
+document.getElementById('ovMenu').addEventListener('click', ()=>{
+  overEl.style.display='none';
+  refreshMenuBests();
+  updateCoins();
+  updateEquipInfo();
+  startEl.style.display='flex';
+  document.getElementById('goBtn').textContent = 'Играть';
+});
+
+// ============================================================
+//  МАГАЗИН
+// ============================================================
+let shopTab = 'upg';
+document.querySelectorAll('.tabBtn').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.tabBtn').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel');
+    shopTab = b.dataset.tab;
+    renderShop();
+  });
+});
+
+function renderShop(){
+  updateCoins();
+  const list = document.getElementById('shopList');
+  list.innerHTML = '';
+
+  if(shopTab==='upg'){
+    UPGRADES.forEach(u=>{
+      const lvl = save.upg[u.key];
+      const div = document.createElement('div');
+      div.className = 'shopItem';
+      const maxed = lvl >= u.max;
+      const cost = maxed ? 0 : u.cost(lvl);
+      div.innerHTML = '<div class="ico">'+u.ico+'</div>'+
+        '<div class="info"><b>'+u.name+' <span style="color:#ffd700">'+'●'.repeat(lvl)+'○'.repeat(u.max-lvl)+'</span></b>'+
+        '<small>'+(maxed ? 'Максимальный уровень' : u.desc(lvl+1))+'</small></div>'+
+        '<div class="acts"><button '+(maxed?'disabled':'')+'>'+(maxed?'МАКС':cost+' 🪙')+'</button></div>';
+      const btn = div.querySelector('button');
+      if(!maxed){
+        btn.disabled = save.coins < cost;
+        btn.addEventListener('click', ()=>{
+          if(save.coins < cost) return;
+          save.coins -= cost;
+          save.upg[u.key]++;
+          persist(); renderShop(); sfx('buy');
+        });
+      }
+      list.appendChild(div);
+    });
+  }
+
+  if(shopTab==='skins'){
+    Object.keys(SKINS).forEach(key=>{
+      const s = SKINS[key];
+      const owned = save.skins.owned.includes(key);
+      const active = save.skins.cur === key;
+      const div = document.createElement('div');
+      div.className = 'shopItem';
+      const acts = document.createElement('div');
+      acts.className = 'acts';
+      const btn = document.createElement('button');
+      if(active){ btn.textContent='НАДЕТО'; btn.classList.add('owned'); btn.disabled = true; }
+      else if(owned){ btn.textContent='НАДЕТЬ'; btn.classList.add('owned'); }
+      else {
+        btn.textContent = s.cost+' 🪙';
+        btn.disabled = save.coins < s.cost;
+        btn.addEventListener('click', ()=>{
+          if(save.coins < s.cost) return;
+          save.coins -= s.cost;
+          save.skins.owned.push(key);
+          save.skins.cur = key;
+          persist(); applySkin(); renderShop(); sfx('power');
+        });
+      }
+      acts.appendChild(btn);
+      const rainbowDot = s.animated ? ' <span style="color:#ff793f">🌈</span>' : '';
+      div.innerHTML = '<div class="ico" style="color:#'+s.head.toString(16).padStart(6,'0')+'">🖌</div>'+
+        '<div class="info"><b>'+s.name+rainbowDot+'</b><small>'+
+        (active?'Активен':owned?'Куплено':'Перекрасить клешню')+'</small></div>';
+      div.appendChild(acts);
+      list.appendChild(div);
+    });
+  }
+
+  if(shopTab==='body'){
+    Object.keys(BODY_THEMES).forEach(key=>{
+      const t = BODY_THEMES[key];
+      const owned = save.body.owned.includes(key);
+      const active = save.body.cur === key;
+      const div = document.createElement('div');
+      div.className = 'shopItem';
+      const acts = document.createElement('div');
+      acts.className = 'acts';
+      const btn = document.createElement('button');
+      if(active){ btn.textContent='УСТАНОВЛЕНО'; btn.classList.add('owned'); btn.disabled = true; }
+      else if(owned){ btn.textContent='УСТАНОВИТЬ'; btn.classList.add('owned'); }
+      else {
+        btn.textContent = t.cost+' 🪙';
+        btn.disabled = save.coins < t.cost;
+        btn.addEventListener('click', ()=>{
+          if(save.coins < t.cost) return;
+          save.coins -= t.cost;
+          save.body.owned.push(key);
+          save.body.cur = key;
+          persist(); applyBodyTheme(); renderShop(); sfx('power');
+        });
+      }
+      acts.appendChild(btn);
+      const sw = '<span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#'+
+        t.frame.toString(16).padStart(6,'0')+';margin-right:6px;vertical-align:middle"></span>';
+      div.innerHTML = '<div class="ico">🎨</div>'+
+        '<div class="info"><b>'+t.name+'</b><small>'+sw+
+        (active?'Активна':owned?'Куплено':'Сменить цвет автомата')+'</small></div>';
+      div.appendChild(acts);
+      list.appendChild(div);
+    });
+  }
+
+  if(shopTab==='items'){
+    CONSUMABLES.forEach(c=>{
+      const count = save.items[c.key]||0;
+      const equipped = !!save.equip[c.key];
+      const div = document.createElement('div');
+      div.className = 'shopItem';
+      const acts = document.createElement('div');
+      acts.className = 'acts';
+      const buyBtn = document.createElement('button');
+      buyBtn.textContent = 'Купить '+c.cost+' 🪙';
+      buyBtn.disabled = save.coins < c.cost;
+      buyBtn.addEventListener('click', ()=>{
+        if(save.coins < c.cost) return;
+        save.coins -= c.cost;
+        save.items[c.key]++;
+        persist(); renderShop(); sfx('buy');
+      });
+      acts.appendChild(buyBtn);
+      if(count>0){
+        const eqBtn = document.createElement('button');
+        eqBtn.className = 'equip'+(equipped?' on':'');
+        eqBtn.textContent = equipped ? 'ВЫКЛ' : 'НАДЕТЬ ×'+count;
+        eqBtn.addEventListener('click', ()=>{
+          save.equip[c.key] = !save.equip[c.key];
+          persist(); renderShop();
+        });
+        acts.appendChild(eqBtn);
+      }
+      div.innerHTML = '<div class="ico">'+c.ico+'</div>'+
+        '<div class="info"><b>'+c.name+(count>0?' <span style="color:#ffd700">×'+count+'</span>':'')+
+        (equipped?' <span style="color:#7bed9f">· надет</span>':'')+'</b>'+
+        '<small>'+c.desc+'</small></div>';
+      div.appendChild(acts);
+      list.appendChild(div);
+    });
+  }
+}
+
+// ============================================================
+//  ВВОД
+// ============================================================
+const keys = {};
+addEventListener('keydown', e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  keys[e.code]=true;
+  if(e.code==='Space' && playing && clawState.phase==='idle') drop();
+});
+addEventListener('keyup', e=>keys[e.code]=false);
+
+const held = {up:0,left:0,right:0,down:0};
+document.querySelectorAll('[data-k]').forEach(b=>{
+  const k = b.dataset.k;
+  if(k==='grab') return;
+  const on = e=>{e.preventDefault(); held[k]=1;};
+  const off = e=>{e.preventDefault(); held[k]=0;};
+  b.addEventListener('pointerdown', on);
+  b.addEventListener('pointerup', off);
+  b.addEventListener('pointerleave', off);
+  b.addEventListener('pointercancel', off);
+});
+document.getElementById('grabMini').addEventListener('pointerdown', e=>{e.preventDefault(); tryGrab();});
+document.getElementById('drop').addEventListener('pointerdown', e=>{e.preventDefault(); tryGrab();});
+
+function tryGrab(){ if(playing && clawState.phase==='idle') drop(); }
+function drop(){ clawState.phase='down'; clawState.t=0; showMsg(''); sfx('down'); }
+
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+const hit = new THREE.Vector3();
+let dragId = null, lastPos = null, lastTapTime = 0;
+
+function pointerToMachine(e){
+  ndc.set((e.clientX/innerWidth)*2-1, -(e.clientY/innerHeight)*2+1);
+  raycaster.setFromCamera(ndc, camera);
+  if(raycaster.ray.intersectPlane(groundPlane, hit)){
+    clawState.x = THREE.MathUtils.clamp(hit.x, -LIM.x, LIM.x);
+    clawState.z = THREE.MathUtils.clamp(hit.z, LIM.zMin, LIM.zMax);
+  }
+}
+renderer.domElement.addEventListener('pointerdown', e=>{
+  initAudio();
+  if(!playing || clawState.phase!=='idle') return;
+  dragId = e.pointerId;
+  lastPos = {x:e.clientX, y:e.clientY};
+  pointerToMachine(e);
+});
+renderer.domElement.addEventListener('pointermove', e=>{
+  if(e.pointerId !== dragId) return;
+  lastPos = {x:e.clientX, y:e.clientY};
+  if(clawState.phase==='idle') pointerToMachine(e);
+});
+function endDrag(e){
+  if(e.pointerId !== dragId) return;
+  dragId = null;
+  const now = performance.now();
+  if(playing && clawState.phase==='idle' && now - lastTapTime < 320) drop();
+  lastTapTime = now;
+}
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', e=>{ if(e.pointerId===dragId) dragId=null; });
+renderer.domElement.addEventListener('contextmenu', e=>e.preventDefault());
+
+// ============================================================
+//  ИГРОВОЙ ЦИКЛ
+// ============================================================
+const clock = new THREE.Clock();
+const GRAV = -14;
+let shake = 0;
+
+function grabRadius(){
+  const base = 1.0 + (save.upg.radius||0)*0.25;
+  return (powers.magnet>0 ? 3.0 : base) * mode.radiusK;
+}
+function clawSpeed(){
+  return 4.5 * (1 + (save.upg.speed||0)*0.25) * (powers.speed>0 ? 2 : 1);
+}
+
+function collectTargets(){
+  const want = powers.double>0 ? 2 : 1;
+  const radius = grabRadius();
+  const picked = [];
+  const pool = balls.filter(b=>b.userData.free);
+  for(let n=0; n<want && pool.length; n++){
+    let best=null, bd=1e9;
+    for(const b of pool){
+      const d = Math.hypot(b.position.x-clawState.x, b.position.z-clawState.z);
+      if(d<bd){bd=d; best=b;}
+    }
+    if(best && bd<=radius){ picked.push(best); pool.splice(pool.indexOf(best),1); }
+    else break;
+  }
+  if(want===2 && picked.length) powers.double = 0;
+  return picked;
+}
+
+function addCoins(n){
+  save.coins += n;
+  persist();
+  updateCoins();
+}
+
+function activatePower(key){
+  showMsg(POWER_DEFS[key].msg);
+  sfx('power');
+  if(key==='magnet'){ powers.magnet = magnetDur(); return; }
+  if(key==='gold'){ addCoins(10); runCoins += 10; flash(); return; }
+  if(key==='double'){ powers.double = 1; return; }
+  powers[key] = POWER_DEFS[key].dur;
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), .05);
+
+  stars.rotation.y += dt*.02;
+  const tt = clock.elapsedTime;
+  spot1.position.set(Math.cos(tt*.5)*8, 10, Math.sin(tt*.5)*8);
+  spot2.position.set(Math.cos(tt*.5+Math.PI)*8, 10, Math.sin(tt*.5+Math.PI)*8);
+  ledMat.color.setHSL((tt*.25)%1, .9, .6);
+  signMat.color.setScalar(.8+.2*Math.sin(tt*3));
+
+  if(save.skins.cur==='rainbow'){
+    const h = (tt*.15)%1;
+    headMat.color.setHSL(h,.8,.6);
+    tipMat.color.setHSL((h+.2)%1,.8,.6);
+    prongs.forEach(p=>p.armMat.color.setHSL(h,.8,.6));
+    lamp.color.setHSL((h+.5)%1,.8,.65);
+  }
+
+  // таймер «На время»: ждём, пока клешня доиграет цикл, потом — итоги
+  if(playing && mode.time>0 && !ending){
+    timeLeft -= dt;
+    if(timeLeft <= 0){
+      timeLeft = 0;
+      if(clawState.phase==='idle') showGameOver();
+      else ending = true;
+    }
+    timeEl.textContent = Math.ceil(timeLeft);
+  }
+
+  let hudDirty = false;
+  for(const k of ['magnet','speed']){
+    if(powers[k]>0){ powers[k]-=dt; if(powers[k]<0) powers[k]=0; hudDirty = true; }
+  }
+  if(hudDirty) updatePowersHUD();
+  if(comboT>0){ comboT-=dt; if(comboT<=0){ combo=0; updateComboHUD(); } }
+
+  const s = clawState;
+  const spd = clawSpeed();
+  const dv = diveSpeed();
+
+  if(s.phase==='idle' && playing){
+    let dx=0, dz=0;
+    if(keys.ArrowLeft||keys.KeyA||held.left)  dx-=1;
+    if(keys.ArrowRight||keys.KeyD||held.right)dx+=1;
+    if(keys.ArrowUp||keys.KeyW||held.up)      dz-=1;
+    if(keys.ArrowDown||keys.KeyS||held.down)  dz+=1;
+    s.x = THREE.MathUtils.clamp(s.x + dx*spd*dt, -LIM.x, LIM.x);
+    s.z = THREE.MathUtils.clamp(s.z + dz*spd*dt, LIM.zMin, LIM.zMax);
+  }
+
+  // >>> ГЛАВНОЕ ИСПРАВЛЕНИЕ: когда время вышло, а клешня была занята —
+  // доигрываем цикл и открываем итоги, вместо вечного «зависания» на 0
+  if(ending && s.phase==='idle') showGameOver();
+
+  switch(s.phase){
+    case 'down':
+      s.y -= dv*dt; s.open = 1;
+      if(s.y <= 1.6){
+        s.y = 1.6;
+        s.targets = collectTargets();
+        s.phase='grab'; s.t=0;
+      }
+      break;
+    case 'grab':
+      s.t += dt;
+      s.open = Math.max(0, 1 - s.t/.5);
+      if(s.t >= .55){
+        if(s.targets.length && playing){
+          combo++; comboT = 6 + (save.upg.combo||0)*2;
+          maxCombo = Math.max(maxCombo, comboMult());
+          updateComboHUD();
+          const isSuper = s.targets[0].userData.power;
+          for(const b of s.targets){
+            b.userData.free = false;
+            if(b === s.targets[0] && b.userData.power) activatePower(b.userData.power);
+          }
+          burst(s.x, 1.6, s.z, isSuper ? 0xffd700 : 0xffffff, isSuper?26:12, isSuper?6:3.5);
+          sfx('catch');
+          if(isSuper) flash();
+          showMsg(s.targets.length>1 ? 'Двойной улов! 🍬🍬' : 'Есть! 🍬');
+        } else if(playing){
+          combo = 0; comboT = 0; updateComboHUD();
+          sfx('miss');
+          showMsg('Мимо…');
+        }
+        s.phase='up'; s.t=0;
+      }
+      break;
+    case 'up':
+      s.t += dt;
+      s.y = Math.min(H-.4, s.y + dv*dt);
+      if(s.y >= H-.4) { s.phase='toChute'; s.t=0; s.sx=s.x; s.sz=s.z; }
+      break;
+    case 'toChute': {
+      s.t += dt;
+      const k = Math.min(1, s.t/1.2), e = k*k*(3-2*k);
+      s.x = s.sx + (CH.x - s.sx)*e;
+      s.z = s.sz + (CH.z - s.sz)*e;
+      if(k>=1){ s.phase='drop'; s.t=0; }
+      break;
+    }
+    case 'drop':
+      s.t += dt;
+      s.open = Math.min(1, s.t/.4);
+      if(s.t>=.4){
+        if(s.targets.length){
+          for(const b of s.targets){ b.userData.vy = 0; b.userData.falling = true; }
+          s.targets = [];
+        }
+        s.phase='back'; s.t=0;
+      }
+      break;
+    case 'back': {
+      s.t += dt;
+      const k = Math.min(1, s.t/1.0), e = k*k*(3-2*k);
+      s.x = s.x + (0 - s.x)*e;
+      s.z = s.z + (-1 - s.z)*e;
+      if(k>=1){ s.phase='idle'; s.open=1; }
+      break;
+    }
+  }
+
+  if(s.targets.length && (s.phase==='up'||s.phase==='toChute'||s.phase==='grab')){
+    s.targets.forEach((b,i)=>{
+      b.position.set(s.x + i*.6, s.y-1.5-BALL_R*.6, s.z);
+    });
+  }
+
+  const drift = mode.drift && playing;
+  for(let i=balls.length-1; i>=0; i--){
+    const b = balls[i], u = b.userData;
+    if(drift && u.free){
+      b.position.x += u.dx*dt;
+      b.position.z += u.dz*dt;
+      if(Math.abs(b.position.x) > W/2-1.2){ b.position.x = Math.sign(b.position.x)*(W/2-1.2); u.dx *= -1; }
+      if(Math.abs(b.position.z) > D/2-1.2){ b.position.z = Math.sign(b.position.z)*(D/2-1.2); u.dz *= -1; }
+      if(Math.hypot(b.position.x-CH.x, b.position.z-CH.z) < 2.4){ u.dx *= -1; u.dz *= -1; }
+    }
+    if(u.falling){
+      u.vy = (u.vy||0) + GRAV*dt;
+      b.position.y += u.vy*dt;
+      if(b.position.y <= .3+BALL_R){
+        b.position.y = .3+BALL_R;
+        u.vy *= -.35;
+        if(Math.abs(u.vy) < .8){
+          u.falling = false; u.free = false; u.collected = true;
+          if(playing){
+            const base = u.power ? 5 : 1;
+            const earn = Math.round(base*comboMult()*wealthMult());
+            addCoins(earn);
+            runCoins += earn;
+            score++; scoreEl.textContent = score;
+            if(score > (save.best[currentMode]||0)){ save.best[currentMode] = score; persist(); }
+            sfx('coin', combo);
+            popupAt(b.position, '+'+earn+' 🪙'+(comboMult()>1?' ×'+comboMult():''));
+            burst(CH.x, 1.2, CH.z, u.power ? 0xffd700 : 0x7bed9f, 10, 3);
+            shake = .3;
+          }
+          u.fade = 1;
+        }
+      }
+    }
+    if(u.collected){
+      u.fade -= dt*.7;
+      b.material.opacity = Math.max(0, u.fade)*.85;
+      b.scale.setScalar(.5 + Math.max(0,u.fade)*.5);
+      if(u.fade<=0){ scene.remove(b); balls.splice(i,1); }
+    } else if(u.free){
+      const amp = u.power ? .06 : .015;
+      const p = Math.sin(tt*2 + u.phase)*amp;
+      b.scale.set(1+p, 1-p, 1+p);
+      if(u.power) b.material.emissiveIntensity = .45 + .35*Math.sin(tt*4 + u.phase);
+    }
+  }
+  if(playing && balls.filter(b=>b.userData.free).length < 12) spawnBall();
+
+  if(shake > .002){
+    shake *= Math.pow(.001, dt);
+    camera.position.set(
+      camBase.x + (Math.random()-.5)*shake,
+      camBase.y + (Math.random()-.5)*shake,
+      camBase.z
+    );
+  } else {
+    camera.position.copy(camBase);
+  }
+
+  chuteRim.material.emissive.setHex(s.phase==='toChute'||s.phase==='drop' ? 0xff3333 : 0x220000);
+
+  const cableLen = Math.max(.2, (H+.4) - s.y);
+  cable.scale.y = cableLen;
+  cable.position.y = cableLen/2;
+  claw.position.set(s.x, s.y, s.z);
+  prongs.forEach(p=>{ p.pivot.rotation.x = -.15 - s.open*.85; });
+  magnetLight.intensity = powers.magnet>0 ? 1.4 : 0;
+
+  marker.position.x = s.x; marker.position.z = s.z;
+  markerOuter.position.x = s.x; markerOuter.position.z = s.z;
+  const showM = s.phase==='idle';
+  marker.visible = showM;
+  markerOuter.visible = showM && powers.magnet>0;
+  if(showM){
+    marker.material.opacity = .35 + .25*Math.sin(tt*4);
+    if(powers.magnet>0){
+      const k = grabRadius();
+      marker.scale.setScalar(k);
+      markerOuter.scale.setScalar(k);
+      markerOuter.material.opacity = .3 + .2*Math.sin(tt*6);
+    } else {
+      marker.scale.setScalar(1);
+    }
+  }
+
+  let pDirty = false;
+  for(let i=0;i<PMAX;i++){
+    const p = parts[i];
+    if(p.life<=0) continue;
+    p.life -= dt;
+    p.vy += GRAV*.6*dt;
+    pPos[i*3]   += p.vx*dt;
+    pPos[i*3+1] += p.vy*dt;
+    pPos[i*3+2] += p.vz*dt;
+    if(p.life<=0) pPos[i*3+1] = -100;
+    pDirty = true;
+  }
+  if(pDirty) pGeo.attributes.position.needsUpdate = true;
+
+  renderer.render(scene, camera);
+}
+for(let i=0;i<22;i++) spawnBall();
+updateCoins();
+refreshMenuBests();
+updateEquipInfo();
+animate();
+
+addEventListener('resize', ()=>{
+  renderer.setSize(innerWidth, innerHeight);
+  fitCamera();
+});
+addEventListener('orientationchange', ()=>setTimeout(fitCamera, 120));
+
+})();
+</script>
+</body>
+</html>

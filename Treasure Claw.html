@@ -1,0 +1,1844 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Автомат со щипцами</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
+      touch-action: none;
+      overscroll-behavior: none;
+      -webkit-user-select: none; user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { display: block; background: #000; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const TAU = Math.PI * 2;
+
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+        r = Math.min(r, w / 2, h / 2);
+        this.moveTo(x + r, y);
+        this.arcTo(x + w, y, x + w, y + h, r);
+        this.arcTo(x + w, y + h, x, y + h, r);
+        this.arcTo(x, y + h, x, y, r);
+        this.arcTo(x, y, x + w, y, r);
+        this.closePath();
+        return this;
+      };
+    }
+
+    const store = {
+      get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+      set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    };
+
+    // ---------- Звук (Web Audio, без файлов) ----------
+    let audioCtx = null;
+    let soundOn = store.get('clawSound') !== '0';
+
+    function initAudio() {
+      if (!audioCtx) {
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (AC) audioCtx = new AC();
+        } catch (e) { audioCtx = null; }
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        try { audioCtx.resume(); } catch (e) {}
+      }
+    }
+
+    function beep(freq, dur, type, vol, slideTo) {
+      if (!soundOn || !audioCtx) return;
+      try {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = type || 'sine';
+        o.frequency.value = freq;
+        if (slideTo) {
+          o.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), audioCtx.currentTime + dur);
+        }
+        g.gain.setValueAtTime(vol || 0.15, audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.start();
+        o.stop(audioCtx.currentTime + dur);
+      } catch (e) {}
+    }
+
+    function sGrab() { beep(210, 0.06, 'square', 0.08); }
+    function sMiss() { beep(120, 0.05, 'square', 0.05); }
+    function sScore() { beep(660, 0.07, 'sine', 0.12, 880); }
+    function sBonus() {
+      beep(523, 0.09, 'triangle', 0.14);
+      setTimeout(() => beep(784, 0.12, 'triangle', 0.14), 90);
+    }
+    function sBomb() { beep(170, 0.3, 'sawtooth', 0.2, 50); }
+    function sDeath() {
+      beep(220, 0.15, 'sawtooth', 0.2, 110);
+      setTimeout(() => beep(150, 0.2, 'sawtooth', 0.22, 60), 140);
+      setTimeout(() => beep(90, 0.35, 'sawtooth', 0.22, 40), 300);
+    }
+    function sCoin() {
+      beep(1318, 0.07, 'square', 0.1);
+      setTimeout(() => beep(1760, 0.1, 'square', 0.1), 70);
+    }
+    function sWin() {
+      const notes = [523, 659, 784, 1046];
+      notes.forEach((f, i) => setTimeout(() => beep(f, 0.14, 'triangle', 0.16), i * 120));
+    }
+    function sBuy() { sCoin(); }
+    function sFail() { beep(140, 0.15, 'square', 0.12, 100); }
+    function sTick() { beep(880, 0.04, 'sine', 0.06); }
+
+    function vibrate(ms) {
+      try {
+        if (navigator.vibrate) navigator.vibrate(ms);
+      } catch (e) {}
+    }
+
+    // ---------- Монеты и покупки ----------
+    let coins = +(store.get('clawCoins') || 0);
+    let owned = [];
+    let equip = { claw: 'claw:silver', accent: 'accent:gold', bonus: 'bonus:circle', bot: 'bot:classic' };
+    try { owned = JSON.parse(store.get('clawOwned') || '[]'); } catch (e) { owned = []; }
+    try {
+      const e = JSON.parse(store.get('clawEquip') || '{}');
+      if (e.claw) equip.claw = e.claw;
+      if (e.accent) equip.accent = e.accent;
+      if (e.bonus) equip.bonus = e.bonus;
+      if (e.bot) equip.bot = e.bot;
+    } catch (e2) {}
+
+    function saveAccount() {
+      store.set('clawCoins', String(coins));
+      store.set('clawOwned', JSON.stringify(owned));
+      store.set('clawEquip', JSON.stringify(equip));
+    }
+
+    // ---------- Магазин ----------
+    const SHOP = {
+      claw: [
+        { id: 'claw:silver',   name: 'Сталь',     color: '#8a8f98', price: 0 },
+        { id: 'claw:gold',     name: 'Золото',    color: '#ffd700', price: 100 },
+        { id: 'claw:ruby',     name: 'Рубин',     color: '#ff4d4d', price: 150 },
+        { id: 'claw:sapphire', name: 'Сапфир',    color: '#4d7dff', price: 150 },
+        { id: 'claw:emerald',  name: 'Изумруд',   color: '#4dff88', price: 150 },
+        { id: 'claw:violet',   name: 'Аметист',   color: '#c04dff', price: 200 },
+        { id: 'claw:rose',     name: 'Роза',      color: '#ff6b9d', price: 200 },
+        { id: 'claw:platinum', name: 'Платина',   color: '#dfe6ee', price: 2500 },
+        { id: 'claw:raduga',   name: 'Радуга',    price: 6000, anim: true }
+      ],
+      accent: [
+        { id: 'accent:gold',   name: 'Золотой',  color: '#ffd700', price: 0 },
+        { id: 'accent:cyan',   name: 'Циан',     color: '#4dffff', price: 150 },
+        { id: 'accent:pink',   name: 'Розовый',  color: '#ff6bd6', price: 150 },
+        { id: 'accent:lime',   name: 'Лайм',     color: '#b3ff4d', price: 150 },
+        { id: 'accent:orange', name: 'Оранж',    color: '#ff9b3d', price: 150 },
+        { id: 'accent:cham',   name: 'Хамелеон', price: 6000, anim: true }
+      ],
+      bonus: [
+        { id: 'bonus:circle', name: 'Шары',   price: 0 },
+        { id: 'bonus:gem',    name: 'Камни',  price: 250 },
+        { id: 'bonus:ring',   name: 'Кольца', price: 250 },
+        { id: 'bonus:star',   name: 'Звёзды', price: 6000 }
+      ],
+      bot: [
+        { id: 'bot:classic',  name: 'Классика', colors: ['#ff6b6b', '#4ecdc4', '#f7b32b'], price: 0 },
+        { id: 'bot:pastel',   name: 'Пастель',  colors: ['#ffb3c1', '#c1b3ff', '#b3ffd9'], price: 200 },
+        { id: 'bot:neon',     name: 'Неон',     colors: ['#ff073a', '#39ff14', '#00f0ff'], price: 250 },
+        { id: 'bot:mono',     name: 'Моно',     colors: ['#e0e0e0', '#9e9e9e', '#616161'], price: 250 },
+        { id: 'bot:ghost',    name: 'Призраки', colors: ['#9d8fff', '#5ee7ff', '#ff9de2'], price: 6000 }
+      ],
+      perks: [
+        { id: 'perk:shield', name: 'Щит от бомб',    desc: 'Бомба не отнимает очки', price: 6000 },
+        { id: 'perk:grab',   name: 'Двойной захват', desc: 'Клешня берёт 6 шариков', price: 4000 },
+        { id: 'perk:freq',   name: 'Частые бонусы',  desc: 'Бонус каждые 2 секунды', price: 3000 }
+      ],
+      modes: [
+        { id: 'mode:sprint', name: 'Спринт',  desc: '30 сек, очки ×2',                  price: 2000, cfg: { time: 30, wb: 0.7, fb: 0.5, g: 1, bomb: 0, mult: 2 } },
+        { id: 'mode:hard',   name: 'Хардкор', desc: '30 сек, много бомб, ×2',           price: 3000, cfg: { time: 30, wb: 0.7, fb: 0.5, g: 1, bomb: 0.45, mult: 2 } },
+        { id: 'mode:marath', name: 'Марафон', desc: '90 сек, очки ×2',                  price: 4000, cfg: { time: 90, wb: 0.6, fb: 0.4, g: 1, bomb: 0, mult: 2 } },
+        { id: 'mode:ultra',  name: 'Ультра',  desc: '60 сек, сильная грав., бомбы, ×3', price: 6000, cfg: { time: 60, wb: 0.75, fb: 0.55, g: 1.5, bomb: 0.15, mult: 3 } }
+      ]
+    };
+    const SHOP_TABS = [
+      { id: 'claw',   name: 'Клешня' },
+      { id: 'bonus',  name: 'Бонусы' },
+      { id: 'bot',    name: 'Боты' },
+      { id: 'accent', name: 'Текст' },
+      { id: 'perks',  name: 'Перки' },
+      { id: 'modes',  name: 'Режимы' }
+    ];
+    let shopTab = 'claw';
+
+    function itemOwned(id) { return owned.indexOf(id) >= 0; }
+    function hasPerk(id) { return itemOwned(id); }
+
+    function ACC() {
+      const it = SHOP.accent.find(a => a.id === equip.accent);
+      if (it && it.anim) return 'hsl(' + ((t * 90) % 360) + ', 85%, 62%)';
+      return it ? it.color : '#ffd700';
+    }
+    function CLAW_COLOR() {
+      const it = SHOP.claw.find(a => a.id === equip.claw);
+      if (it && it.anim) return 'hsl(' + ((t * 60) % 360) + ', 80%, 60%)';
+      return it ? it.color : '#8a8f98';
+    }
+    function BOT_COLORS() {
+      const it = SHOP.bot.find(a => a.id === equip.bot);
+      return it ? it.colors : ['#ff6b6b', '#4ecdc4', '#f7b32b'];
+    }
+    function BONUS_STYLE() { return equip.bonus.replace('bonus:', ''); }
+
+    let W = 0, H = 0, DPR = 1;
+    let TARGET_BALLS = 500;
+
+    const HOLE_H = 56;
+
+    let cups = [];
+    function buildCups() {
+      cups = [];
+      const total = 1 + (mode === 'bots' ? botCount : 0);
+      const slotW = W / total;
+      const hw = Math.min(110, slotW - 10);
+      for (let i = 0; i < total; i++) {
+        cups.push({
+          x: slotW * (i + 0.5),
+          w: hw, h: HOLE_H,
+          bot: i < total - 1 ? i : -1
+        });
+      }
+    }
+
+    function resize() {
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = W * DPR;
+      canvas.height = H * DPR;
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      buildCups();
+      TARGET_BALLS = Math.round((W * H) / 400);
+      TARGET_BALLS = Math.max(150, Math.min(5000, TARGET_BALLS));
+      claw.x = Math.min(Math.max(claw.x, 40), W - 40);
+      clawTargetX = Math.min(Math.max(clawTargetX, 40), W - 40);
+    }
+    window.addEventListener('resize', resize);
+    window.addEventListener('orientationchange', () => setTimeout(resize, 150));
+
+    // ---------- Настройки ----------
+    const G = 1050;
+    const SPAWN_INTERVAL = 0.08;
+    const SPAWN_PER_PORTION = 3;
+    const GRAB_LIMIT = 4;
+    const GRAB_RADIUS = 55;
+    const POINTS_BIG = 15;
+    const POINTS_SMALL = 5;
+    const BIG_THRESHOLD = 14;
+    const BONUS_EVERY = 4;
+    const BONUS_MAX_ON_SCREEN = 4;
+    const BTN_SPEED = 0.75;
+    const SHOT_VY_MIN = 420;
+    const SHOT_VY_MAX = 780;
+
+    // ---------- Режимы ----------
+    const BASE_MODES = [
+      { id: 'classic', name: 'КЛАССИК',     desc: '60 секунд, честная физика' },
+      { id: 'endless', name: 'БЕСКОНЕЧНЫЙ', desc: 'Без таймера, завершаешь сам' },
+      { id: 'custom',  name: 'СВОЙ',        desc: 'Время, гравитация, бомбы, очки' },
+      { id: 'bots',    name: 'С БОТОМ',     desc: 'Соревнование против ботов' }
+    ];
+    function ALL_MODES() {
+      return BASE_MODES.concat(SHOP.modes.filter(m => itemOwned(m.id)));
+    }
+    let mode = 'classic';
+    let CFG = null;
+    let botCount = 1;
+
+    function modeHasRecord(id) { return id === 'classic' || id === 'endless'; }
+    function findMode(id) { return ALL_MODES().find(m => m.id === id); }
+
+    const C_TIME   = [30, 60, 90, null];
+    const C_TIME_N = ['30 сек', '60 сек', '90 сек', '∞'];
+    const C_G      = [0.5, 1, 1.5];
+    const C_G_NAME = ['слабая', 'обычная', 'сильная'];
+    const C_BOMB   = [0, 0.15, 0.45];
+    const C_B_NAME = ['нет', 'мало', 'много'];
+    const C_MULT   = [1, 2, 3];
+
+    const custom = { timeIdx: 1, gravIdx: 1, bombIdx: 0, multIdx: 0 };
+
+    // ---------- 14 бонусов (включая Смерть) ----------
+    const BONUSES = [
+      { id: 'x2', sym: '×2', color: '#ffd700' },
+      { id: 'x3', sym: '×3', color: '#ff77dd' },
+      { id: 't5', sym: '+5', color: '#55aaff' },
+      { id: 't15', sym: '+15', color: '#3388ff' },
+      { id: 'p50', sym: '+50', color: '#ff5577' },
+      { id: 'p200', sym: '+200', color: '#ff44dd' },
+      { id: 'bomb', sym: '✖', color: '#ff3333' },
+      { id: 'magnet', sym: 'M', color: '#55ff55' },
+      { id: 'mega', sym: '8', color: '#88ff44' },
+      { id: 'turbo', sym: 'T', color: '#ffaa22' },
+      { id: 'frenzy', sym: 'Д', color: '#aa66ff' },
+      { id: 'light', sym: 'Л', color: '#eeeeee' },
+      { id: 'mystery', sym: '?', color: '#dddddd' },
+      { id: 'death', sym: '☠', color: '#222222' }
+    ];
+    const BONUS_BY_ID = Object.fromEntries(BONUSES.map(b => [b.id, b]));
+
+    const PALETTE = [];
+    for (let i = 0; i < 12; i++) PALETTE.push('hsl(' + (i * 30) + ', 80%, 60%)');
+
+    // ---------- Состояние ----------
+    let state = 'MODES'; // MODES | SHOP | PLAY | OVER
+    let score = 0;
+    let timeLeft = 60;
+    let t = 0;
+    let hintTimer = 0;
+    let moveDir = 0;
+    let ballsCollected = 0;
+    let jackpotWon = false;
+    let lastSecond = -1;
+
+    const effects = {
+      multFactor: 1, multTime: 0,
+      magnetTime: 0, megaTime: 0, turboTime: 0, lightTime: 0
+    };
+
+    const balls = [];
+    const dying = [];
+    const floaters = [];
+    const bots = [];
+
+    // ---------- Рекорды ----------
+    function bestOf(id) { return modeHasRecord(id) ? (+(store.get('clawBest_' + id) || 0)) : 0; }
+    function setBestOf(id, v) { if (modeHasRecord(id)) store.set('clawBest_' + id, String(v)); }
+    let best = 0;
+
+    // ---------- Джекпот ----------
+    function jackpotToday() {
+      const d = new Date().toDateString();
+      let j = null;
+      try { j = JSON.parse(store.get('clawJackpot') || 'null'); } catch (e) {}
+      if (!j || j.date !== d) return 0;
+      return j.count;
+    }
+    function jackpotUse() {
+      const d = new Date().toDateString();
+      store.set('clawJackpot', JSON.stringify({ date: d, count: jackpotToday() + 1 }));
+    }
+
+    function buildCFG() {
+      if (mode === 'classic') CFG = { time: 60, wb: 0.6, fb: 0.4, g: 1, bomb: 0 };
+      else if (mode === 'endless') CFG = { time: null, wb: 0.6, fb: 0.4, g: 1, bomb: 0 };
+      else if (mode === 'bots') CFG = { time: 60, wb: 0.6, fb: 0.4, g: 1, bomb: 0 };
+      else if (mode === 'custom') CFG = {
+        time: C_TIME[custom.timeIdx],
+        wb: 0.6 + C_G[custom.gravIdx] * 0.1,
+        fb: 0.4 + C_G[custom.gravIdx] * 0.1,
+        g: C_G[custom.gravIdx],
+        bomb: C_BOMB[custom.bombIdx],
+        mult: C_MULT[custom.multIdx]
+      };
+      else {
+        const md = findMode(mode);
+        CFG = md ? Object.assign({}, md.cfg) : { time: 60, wb: 0.6, fb: 0.4, g: 1, bomb: 0 };
+      }
+    }
+
+    // ---------- Шарики: генерация снизу ----------
+    function makeBall(x, y, bonusId = null) {
+      const radius = bonusId ? 14 + Math.random() * 4 : 5 + Math.random() * 7;
+      return {
+        x: x !== undefined ? x : 30 + Math.random() * (W - 60),
+        y: y !== undefined ? y : H + radius + 4,
+        vx: (Math.random() - 0.5) * 260,
+        vy: y !== undefined ? Math.random() * 60 : -(SHOT_VY_MIN + Math.random() * (SHOT_VY_MAX - SHOT_VY_MIN)),
+        radius,
+        ci: Math.floor(Math.random() * 12),
+        color: bonusId ? BONUS_BY_ID[bonusId].color : null,
+        bonusId,
+        pulse: Math.random() * TAU
+      };
+    }
+
+    function pickBonusId() {
+      if (CFG.bomb > 0 && Math.random() < CFG.bomb) return 'bomb';
+      if (Math.random() < 0.07) return 'death';
+      const others = BONUSES.filter(b => b.id !== 'death' && b.id !== 'bomb');
+      return others[Math.floor(Math.random() * others.length)].id;
+    }
+
+    function spawnBonus(x) {
+      balls.push(makeBall(x, undefined, pickBonusId()));
+    }
+
+    // ---------- Щипец игрока ----------
+    const claw = {
+      x: W * 0.5, y: 30,
+      busy: false, state: 'IDLE',
+      t: 0, openness: 1, held: [],
+      grabbed: false, released: false
+    };
+    let clawTargetX = W * 0.5;
+    const CLAW_MIN_Y = 26;
+    function clawTipY() { return claw.y + 34; }
+    function grabLimit() {
+      if (hasPerk('perk:grab')) return 6;
+      return effects.megaTime > 0 ? 8 : GRAB_LIMIT;
+    }
+
+    function clawSpeed() {
+      return H * 0.85 * (effects.turboTime > 0 ? 2 : 1);
+    }
+    function hLerp(cur, target, dt, k) {
+      return cur + (target - cur) * Math.min(1, k * dt);
+    }
+
+    function releaseHeld() {
+      for (const b of claw.held) {
+        b.vx = (Math.random() - 0.5) * 300;
+        b.vy = Math.random() * 200;
+        balls.push(b);
+      }
+      claw.held = [];
+    }
+
+    function updateClaw(dt) {
+      if (moveDir !== 0 && !claw.busy) {
+        clawTargetX = Math.max(40, Math.min(W - 40, clawTargetX + moveDir * W * BTN_SPEED * dt));
+      }
+      if (!claw.busy) {
+        claw.openness = Math.min(1, claw.openness + dt * 5);
+        claw.x = hLerp(claw.x, clawTargetX, dt, 12);
+        return;
+      }
+      const sp = clawSpeed();
+      switch (claw.state) {
+        case 'DESCEND': {
+          claw.y += sp * dt;
+          let limit = H - 20;
+          for (const b of balls) {
+            if (Math.abs(b.x - claw.x) < GRAB_RADIUS && b.y + b.radius < limit) {
+              limit = Math.min(limit, b.y + b.radius - 6);
+            }
+          }
+          if (clawTipY() >= limit) { claw.state = 'GRAB'; claw.t = 0; }
+          break;
+        }
+        case 'GRAB': {
+          claw.t += dt;
+          if (claw.t >= 0.18 && !claw.grabbed) {
+            claw.grabbed = true;
+            const radius = GRAB_RADIUS * (effects.magnetTime > 0 ? 2 : 1);
+            const candidates = balls
+              .map(b => ({ b, d: Math.hypot(b.x - claw.x, b.y - clawTipY()) }))
+              .filter(o => o.d < radius + o.b.radius * 0.5)
+              .sort((a, b2) => a.d - b2.d)
+              .slice(0, grabLimit());
+            claw.held = candidates.map(o => o.b);
+            for (const b of claw.held) {
+              const i = balls.indexOf(b);
+              if (i >= 0) balls.splice(i, 1);
+            }
+            if (claw.held.length > 0) sGrab(); else sMiss();
+          }
+          claw.openness *= Math.pow(0.02, dt);
+          if (claw.t > 0.45) { claw.state = 'ASCEND'; claw.grabbed = false; }
+          break;
+        }
+        case 'ASCEND':
+          claw.y -= sp * dt;
+          if (claw.y <= CLAW_MIN_Y) { claw.y = CLAW_MIN_Y; claw.state = 'TO_CUP'; }
+          break;
+        case 'TO_CUP': {
+          claw.openness = Math.min(1, claw.openness + dt * 3);
+          const cx = cups[cups.length - 1].x;
+          claw.x = hLerp(claw.x, cx, dt, 8);
+          if (Math.abs(cx - claw.x) < 4) {
+            claw.state = 'RELEASE'; claw.t = 0; claw.released = false;
+          }
+          break;
+        }
+        case 'RELEASE': {
+          claw.t += dt;
+          claw.openness = Math.min(1, claw.openness + dt * 8);
+          if (claw.t >= 0.08 && !claw.released) {
+            claw.released = true;
+            const cup = cups[cups.length - 1];
+            for (const b of claw.held) {
+              b.x = cup.x + (Math.random() - 0.5) * (cup.w - b.radius * 2);
+              b.y = clawTipY() + 10;
+              b.vx = (Math.random() - 0.5) * 120;
+              b.vy = 180;
+              collect(b, true);
+            }
+            claw.held = [];
+          }
+          if (claw.t > 0.35) {
+            claw.busy = false;
+            claw.state = 'IDLE';
+          }
+          break;
+        }
+      }
+      const n = claw.held.length;
+      claw.held.forEach((b, i) => {
+        b.x = claw.x + (i - (n - 1) / 2) * 18;
+        b.y = clawTipY() - b.radius * 0.4;
+        b.vx = 0; b.vy = 0;
+      });
+    }
+
+    // ---------- Боты ----------
+    function makeBots() {
+      bots.length = 0;
+      if (mode !== 'bots') return;
+      const colors = BOT_COLORS();
+      for (let i = 0; i < botCount; i++) {
+        bots.push({
+          slot: i,
+          x: cups[i].x, y: 30,
+          busy: false, state: 'IDLE',
+          t: 0, openness: 1, held: [],
+          targetX: cups[i].x, wait: 0.15 + Math.random() * 0.6,
+          grabbed: false, released: false,
+          score: 0,
+          color: colors[i % colors.length]
+        });
+      }
+    }
+    function botTipY(bt) { return bt.y + 34; }
+
+    function updateBots(dt) {
+      if (mode !== 'bots' || state !== 'PLAY') return;
+      for (const bt of bots) {
+        if (!bt.busy) {
+          bt.openness = Math.min(1, bt.openness + dt * 5);
+          if (bt.wait > 0) { bt.wait -= dt; continue; }
+          bt.x = hLerp(bt.x, bt.targetX, dt, 8);
+          if (Math.abs(bt.targetX - bt.x) < 4) {
+            bt.busy = true; bt.state = 'DESCEND'; bt.t = 0;
+          }
+          continue;
+        }
+        const sp = H * 0.8;
+        switch (bt.state) {
+          case 'DESCEND': {
+            bt.y += sp * dt;
+            let limit = H - 20;
+            for (const b of balls) {
+              if (Math.abs(b.x - bt.x) < GRAB_RADIUS && b.y + b.radius < limit) {
+                limit = Math.min(limit, b.y + b.radius - 6);
+              }
+            }
+            if (botTipY(bt) >= limit) { bt.state = 'GRAB'; bt.t = 0; }
+            break;
+          }
+          case 'GRAB': {
+            bt.t += dt;
+            if (bt.t >= 0.18 && !bt.grabbed) {
+              bt.grabbed = true;
+              const candidates = balls
+                .filter(b => !b.bonusId)
+                .map(b => {
+                  let near = 0;
+                  for (const o of balls) {
+                    if (!o.bonusId && o !== b && Math.hypot(o.x - b.x, o.y - b.y) < 60) near++;
+                  }
+                  return { b, d: Math.hypot(b.x - bt.x, b.y - botTipY(bt)) - near * 12 };
+                })
+                .filter(o => o.d < GRAB_RADIUS + o.b.radius * 0.5)
+                .sort((a, b2) => a.d - b2.d)
+                .slice(0, 4);
+              bt.held = candidates.map(o => o.b);
+              for (const b of bt.held) {
+                const i = balls.indexOf(b);
+                if (i >= 0) balls.splice(i, 1);
+              }
+            }
+            bt.openness *= Math.pow(0.02, dt);
+            if (bt.t > 0.45) { bt.state = 'ASCEND'; bt.grabbed = false; }
+            break;
+          }
+          case 'ASCEND':
+            bt.y -= sp * dt;
+            if (bt.y <= CLAW_MIN_Y) { bt.y = CLAW_MIN_Y; bt.state = 'TO_CUP'; }
+            break;
+          case 'TO_CUP': {
+            bt.openness = Math.min(1, bt.openness + dt * 3);
+            const cup = cups[bt.slot];
+            bt.x = hLerp(bt.x, cup.x, dt, 8);
+            if (Math.abs(cup.x - bt.x) < 4) { bt.state = 'RELEASE'; bt.t = 0; bt.released = false; }
+            break;
+          }
+          case 'RELEASE': {
+            bt.t += dt;
+            bt.openness = Math.min(1, bt.openness + dt * 8);
+            if (bt.t >= 0.08 && !bt.released) {
+              bt.released = true;
+              const cup = cups[bt.slot];
+              for (const b of bt.held) {
+                b.x = cup.x + (Math.random() - 0.5) * (cup.w - b.radius * 2);
+                b.y = botTipY(bt) + 10;
+                b.vx = (Math.random() - 0.5) * 120;
+                b.vy = 180;
+                const pts = b.radius >= BIG_THRESHOLD ? POINTS_BIG : POINTS_SMALL;
+                bt.score += pts;
+                dying.push({ b, life: 1 });
+              }
+              bt.held = [];
+            }
+            if (bt.t > 0.35) {
+              bt.busy = false; bt.state = 'IDLE'; bt.released = false;
+              bt.wait = 0.15 + Math.random() * 0.6;
+              bt.targetX = 40 + Math.random() * (W - 80);
+            }
+            break;
+          }
+        }
+        const n = bt.held.length;
+        bt.held.forEach((b, i) => {
+          b.x = bt.x + (i - (n - 1) / 2) * 18;
+          b.y = botTipY(bt) - b.radius * 0.4;
+          b.vx = 0; b.vy = 0;
+        });
+      }
+    }
+
+    // ---------- Очки и бонусы ----------
+    function mult() {
+      let m = effects.multTime > 0 ? effects.multFactor : 1;
+      if (CFG.mult && CFG.mult > m) m = CFG.mult;
+      return m;
+    }
+
+    function addPoints(p) {
+      score += p * mult();
+      if (score < 0) score = 0;
+      if (modeHasRecord(mode) && score > best) {
+        best = score;
+        setBestOf(mode, best);
+      }
+    }
+
+    function float_(text, color, big) {
+      floaters.push({ x: cups[cups.length - 1].x, y: HOLE_H + 28, text, life: 1.4, color, big: !!big });
+    }
+
+    function applyBonus(id) {
+      switch (id) {
+        case 'x2':
+          effects.multFactor = 2; effects.multTime = Math.max(effects.multTime, 10);
+          float_('×2 ОЧКИ!', '#ffd700', true); sBonus();
+          break;
+        case 'x3':
+          effects.multFactor = 3; effects.multTime = Math.max(effects.multTime, 5);
+          float_('×3 ОЧКА!', '#ff77dd', true); sBonus();
+          break;
+        case 't5':
+          if (!CFG.time) { addPoints(25); float_('+25', '#55aaff', true); sBonus(); }
+          else { timeLeft += 5; float_('+5 СЕК!', '#55aaff', true); sBonus(); }
+          break;
+        case 't15':
+          if (!CFG.time) { addPoints(75); float_('+75', '#3388ff', true); sBonus(); }
+          else { timeLeft += 15; float_('+15 СЕК!', '#3388ff', true); sBonus(); }
+          break;
+        case 'p50': addPoints(50); float_('+50', '#ff5577', true); sBonus(); break;
+        case 'p200': addPoints(200); float_('+200', '#ff44dd', true); sBonus(); break;
+        case 'bomb':
+          if (hasPerk('perk:shield')) {
+            float_('Щит! Бомба погашена', '#88ff88', true);
+            sBonus();
+          } else {
+            score -= 100; if (score < 0) score = 0;
+            float_('−100', '#ff3333', true);
+            sBomb(); vibrate(120);
+          }
+          break;
+        case 'magnet': effects.magnetTime = 10; float_('МАГНИТ!', '#55ff55', true); sBonus(); break;
+        case 'mega': effects.megaTime = 10; float_('МЕГА-ЩИПЕЦ!', '#88ff44', true); sBonus(); break;
+        case 'turbo': effects.turboTime = 10; float_('ТУРБО!', '#ffaa22', true); sBonus(); break;
+        case 'frenzy':
+          float_('ДОЖДЬ БОНУСОВ!', '#aa66ff', true);
+          sBonus();
+          for (let i = 0; i < 8; i++) spawnBonus();
+          break;
+        case 'light': effects.lightTime = 6; float_('ЛЕГКОСТЬ!', '#eeeeee', true); sBonus(); break;
+        case 'mystery': {
+          const pool = BONUSES.filter(b => b.id !== 'mystery' && b.id !== 'death');
+          const pick = pool[Math.floor(Math.random() * pool.length)];
+          float_('СЮРПРИЗ: ' + pick.sym, '#dddddd', true);
+          sBonus();
+          applyBonus(pick.id);
+          break;
+        }
+        case 'death':
+          score -= 300; if (score < 0) score = 0;
+          effects.multFactor = 1; effects.multTime = 0;
+          effects.magnetTime = effects.megaTime = effects.turboTime = effects.lightTime = 0;
+          float_('СМЕРТЬ! −300', '#ff2222', true);
+          sDeath(); vibrate(200);
+          break;
+      }
+    }
+
+    function collect(b, fromClaw) {
+      if (fromClaw) {
+        if (!b.bonusId) {
+          ballsCollected++;
+          const base = b.radius >= BIG_THRESHOLD ? POINTS_BIG : POINTS_SMALL;
+          addPoints(base);
+          float_('+' + base * mult());
+          sScore();
+        } else {
+          applyBonus(b.bonusId);
+        }
+      }
+      dying.push({ b, life: 1 });
+    }
+
+    // ---------- Монеты за раунд ----------
+    function coinReward() {
+      if (mode === 'classic') return ballsCollected * 3;
+      if (mode === 'endless') return Math.floor(ballsCollected / 2);
+      if (mode === 'bots') {
+        let c = ballsCollected * 3;
+        const win = score > Math.max.apply(null, bots.map(b => b.score).concat([0]));
+        if (win) {
+          if (botCount === 1) c += 10;
+          else if (botCount === 2) c += 50;
+          else if (botCount === 3) c += 100;
+        }
+        return c;
+      }
+      return (CFG.time == null) ? Math.floor(ballsCollected / 2) : ballsCollected;
+    }
+
+    // ---------- Физика ----------
+    function collide() {
+      const cell = 26;
+      const cols = Math.max(1, Math.ceil(W / cell));
+      const rows = Math.max(1, Math.ceil(H / cell));
+      const grid = new Array(cols * rows);
+
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+        let cx = (b.x / cell) | 0; if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
+        let cy = (b.y / cell) | 0; if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
+        const k = cy * cols + cx;
+        (grid[k] || (grid[k] = [])).push(b);
+      }
+
+      const offs = [[0, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+      for (let cy = 0; cy < rows; cy++) {
+        for (let cx = 0; cx < cols; cx++) {
+          const arr = grid[cy * cols + cx];
+          if (!arr) continue;
+          for (const [ox, oy] of offs) {
+            const nx = cx + ox, ny = cy + oy;
+            if (nx < 0 || nx >= cols || ny >= rows) continue;
+            const narr = (ox === 0 && oy === 0) ? arr : grid[ny * cols + nx];
+            if (!narr) continue;
+            for (let i = 0; i < arr.length; i++) {
+              const a = arr[i];
+              const start = (narr === arr) ? i + 1 : 0;
+              for (let j = start; j < narr.length; j++) {
+                const b = narr[j];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const r = a.radius + b.radius;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < r * r && d2 > 0.0001) {
+                  const d = Math.sqrt(d2), nxs = dx / d, nys = dy / d;
+                  const p1 = a.vx * nxs + a.vy * nys;
+                  const p2 = b.vx * nxs + b.vy * nys;
+                  if (p1 - p2 > 0) {
+                    a.vx += (p2 - p1) * nxs; a.vy += (p2 - p1) * nys;
+                    b.vx += (p1 - p2) * nxs; b.vy += (p1 - p2) * nys;
+                  }
+                  const push = (r - d) / 2;
+                  a.x -= nxs * push; a.y -= nys * push;
+                  b.x += nxs * push; b.y += nys * push;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    function integrate(dt) {
+      let g = G * CFG.g;
+      if (effects.lightTime > 0) g *= 0.25;
+      const drag = Math.pow(0.94, dt);
+      for (const b of balls) {
+        b.vy += g * dt;
+        b.vx *= drag; b.vy *= drag;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.pulse += dt * 6;
+      }
+    }
+
+    function walls() {
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+        if (b.x - b.radius <= 0) { b.x = b.radius; if (b.vx < 0) b.vx *= -CFG.wb; }
+        else if (b.x + b.radius >= W) { b.x = W - b.radius; if (b.vx > 0) b.vx *= -CFG.wb; }
+
+        let taken = false;
+        for (const c of cups) {
+          if (b.y - b.radius <= HOLE_H && Math.abs(b.x - c.x) < c.w / 2) {
+            dying.push({ b, life: 1 });
+            taken = true;
+            break;
+          }
+        }
+        if (taken) {
+          balls.splice(i, 1);
+          i--;
+          continue;
+        }
+
+        if (b.y - b.radius <= 0) { b.y = b.radius; if (b.vy < 0) b.vy *= -CFG.wb; }
+        if (b.y + b.radius >= H && b.vy > 0) {
+          b.y = H - b.radius;
+          b.vy = -b.vy * CFG.fb;
+          b.vx *= 0.98;
+        }
+      }
+    }
+
+    // ---------- Отрисовка ----------
+    function drawHoles() {
+      const colors = BOT_COLORS();
+      for (const c of cups) {
+        const x0 = c.x - c.w / 2;
+        ctx.fillStyle = '#0d0d0d';
+        ctx.fillRect(x0, 0, c.w, HOLE_H);
+        ctx.strokeStyle = c.bot >= 0 ? colors[c.bot % colors.length] + '99' : '#3a3a3a';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x0, 0, c.w, HOLE_H);
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(c.x, 16); ctx.lineTo(c.x, 34);
+        ctx.lineTo(c.x - 7, 26);
+        ctx.moveTo(c.x, 34); ctx.lineTo(c.x + 7, 26);
+        ctx.stroke();
+      }
+    }
+
+    function drawClawArm(c, tipY, color) {
+      const x = c.x, y = c.y;
+      ctx.strokeStyle = '#666';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, y); ctx.stroke();
+      ctx.fillStyle = color || CLAW_COLOR();
+      ctx.beginPath(); ctx.roundRect(x - 14, y, 28, 18, 4); ctx.fill();
+      const spread = 16 + c.openness * 42;
+      ctx.strokeStyle = color || CLAW_COLOR();
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(x + side * 10, y + 16);
+        ctx.quadraticCurveTo(x + side * spread, y + 26, x + side * spread * 0.55, tipY);
+        ctx.stroke();
+      }
+    }
+
+    function drawBonusShape(x, y, r, info, glow) {
+      const style = BONUS_STYLE();
+      ctx.beginPath();
+      if (style === 'gem') {
+        const s = r + 3 + glow * 4;
+        ctx.moveTo(x, y - s); ctx.lineTo(x + s, y);
+        ctx.lineTo(x, y + s); ctx.lineTo(x - s, y);
+        ctx.closePath();
+      } else {
+        ctx.arc(x, y, r + 4 + glow * 5, 0, TAU);
+      }
+      ctx.fillStyle = info.color + '44';
+      ctx.fill();
+
+      ctx.beginPath();
+      if (style === 'gem') {
+        ctx.moveTo(x, y - r); ctx.lineTo(x + r, y);
+        ctx.lineTo(x, y + r); ctx.lineTo(x - r, y);
+        ctx.closePath();
+      } else if (style === 'ring') {
+        ctx.arc(x, y, r, 0, TAU);
+      } else if (style === 'star') {
+        for (let k = 0; k < 5; k++) {
+          const a1 = -Math.PI / 2 + k * TAU / 5;
+          const a2 = a1 + TAU / 10;
+          const R = r + 4, rr2 = (r + 4) * 0.45;
+          ctx.lineTo(x + Math.cos(a1) * R, y + Math.sin(a1) * R);
+          ctx.lineTo(x + Math.cos(a2) * rr2, y + Math.sin(a2) * rr2);
+        }
+        ctx.closePath();
+      } else {
+        ctx.arc(x, y, r, 0, TAU);
+      }
+      if (style === 'ring') {
+        ctx.strokeStyle = info.color;
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.fillStyle = info.color + '66';
+        ctx.fill();
+      } else {
+        ctx.fillStyle = info.color;
+        ctx.fill();
+      }
+
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold ' + Math.round(r * 0.95) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(info.sym, x, y + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    function drawBalls() {
+      if (balls.length < 1500) {
+        for (const b of balls) {
+          if (!b.bonusId) {
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.radius, 0, TAU);
+            ctx.fillStyle = PALETTE[b.ci];
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(b.x - b.radius * 0.3, b.y - b.radius * 0.3, b.radius * 0.35, 0, TAU);
+            ctx.fillStyle = 'rgba(255,255,255,0.35)';
+            ctx.fill();
+          }
+        }
+      } else {
+        for (let c = 0; c < 12; c++) {
+          ctx.fillStyle = PALETTE[c];
+          ctx.beginPath();
+          for (const b of balls) {
+            if (b.ci === c && !b.bonusId) {
+              ctx.moveTo(b.x + b.radius, b.y);
+              ctx.arc(b.x, b.y, b.radius, 0, TAU);
+            }
+          }
+          ctx.fill();
+        }
+      }
+
+      for (const b of balls) {
+        if (!b.bonusId) continue;
+        const info = BONUS_BY_ID[b.bonusId];
+        const glow = 0.5 + 0.5 * Math.sin(b.pulse);
+        drawBonusShape(b.x, b.y, b.radius, info, glow);
+      }
+    }
+
+    function drawDying(dt) {
+      for (const d of dying) {
+        d.life -= dt * 2.4;
+        if (d.life <= 0) continue;
+        d.b.y += 120 * dt;
+        ctx.globalAlpha = d.life;
+        if (d.b.bonusId) {
+          drawBonusShape(d.b.x, d.b.y, d.b.radius * d.life, BONUS_BY_ID[d.b.bonusId], 0);
+        } else {
+          ctx.beginPath();
+          ctx.arc(d.b.x, d.b.y, d.b.radius * d.life, 0, TAU);
+          ctx.fillStyle = PALETTE[d.b.ci];
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+      for (let i = dying.length - 1; i >= 0; i--) {
+        if (dying[i].life <= 0) dying.splice(i, 1);
+      }
+    }
+
+    function updateFloaters(dt) {
+      for (const f of floaters) {
+        f.life -= dt * 0.9;
+        f.y -= 70 * dt;
+      }
+      for (let i = floaters.length - 1; i >= 0; i--) {
+        if (floaters[i].life <= 0) floaters.splice(i, 1);
+      }
+    }
+
+    function drawButton(x, y, w, h, label, accent) {
+      const ac = ACC();
+      ctx.fillStyle = accent ? ac + '2b' : 'rgba(255,255,255,0.08)';
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 10);
+      ctx.fill();
+      ctx.strokeStyle = accent ? ac : 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = accent ? ac : 'rgba(255,255,255,0.9)';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + w / 2, y + h / 2);
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+    }
+
+    function drawSettingRow(rect, label, value) {
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.beginPath(); ctx.roundRect(rect.x, rect.y, rect.w, rect.h, 8); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(label, rect.x + 14, rect.y + 26);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = ACC();
+      ctx.font = 'bold 14px sans-serif';
+      ctx.fillText(value, rect.x + rect.w / 2 + 20, rect.y + 26);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.font = 'bold 18px sans-serif';
+      ctx.fillText('‹', rect.x + rect.w / 2 - 26, rect.y + 27);
+      ctx.fillText('›', rect.x + rect.w / 2 + 66, rect.y + 27);
+      ctx.textAlign = 'left';
+    }
+
+    const BTN_SIZE = 76;
+    function btnL() { return { x: 14, y: H - BTN_SIZE - 14, w: BTN_SIZE, h: BTN_SIZE }; }
+    function btnR() { return { x: W - BTN_SIZE - 14, y: H - BTN_SIZE - 14, w: BTN_SIZE, h: BTN_SIZE }; }
+
+    function drawMoveButtons() {
+      if (state !== 'PLAY') return;
+      const ac = ACC();
+      const l = btnL(), r = btnR();
+      const active = ac + '4d';
+      const idle = 'rgba(255,255,255,0.10)';
+
+      ctx.fillStyle = moveDir === -1 ? active : idle;
+      ctx.beginPath(); ctx.roundRect(l.x, l.y, l.w, l.h, 14); ctx.fill();
+      ctx.strokeStyle = moveDir === -1 ? ac : 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = moveDir === -1 ? ac : 'rgba(255,255,255,0.85)';
+      ctx.font = 'bold 36px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('‹', l.x + l.w / 2, l.y + l.h / 2);
+
+      ctx.fillStyle = moveDir === 1 ? active : idle;
+      ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 14); ctx.fill();
+      ctx.strokeStyle = moveDir === 1 ? ac : 'rgba(255,255,255,0.4)';
+      ctx.stroke();
+      ctx.fillStyle = moveDir === 1 ? ac : 'rgba(255,255,255,0.85)';
+      ctx.fillText('›', r.x + r.w / 2, r.y + r.h / 2);
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+    }
+
+    // ---------- Кнопка звука (между ‹ и › внизу) ----------
+    function soundBtn() {
+      return { x: W / 2 - 26, y: H - BTN_SIZE - 14 + 21, w: 52, h: 34 };
+    }
+
+    function drawSoundButton() {
+      if (state !== 'PLAY') return;
+      const r = soundBtn();
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Динамик: корпус + треугольник
+      const cx = r.x + r.w / 2 - 4, cy = r.y + r.h / 2;
+      ctx.fillStyle = soundOn ? ACC() : 'rgba(255,255,255,0.5)';
+      ctx.beginPath();
+      ctx.moveTo(cx - 8, cy - 3);
+      ctx.lineTo(cx - 3, cy - 3);
+      ctx.lineTo(cx + 2, cy - 8);
+      ctx.lineTo(cx + 2, cy + 8);
+      ctx.lineTo(cx - 3, cy + 3);
+      ctx.lineTo(cx - 8, cy + 3);
+      ctx.closePath();
+      ctx.fill();
+
+      if (soundOn) {
+        ctx.strokeStyle = ACC();
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx + 4, cy, 6, -Math.PI / 3, Math.PI / 3);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = '#ff8a8a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + 5, cy - 6);
+        ctx.lineTo(cx + 11, cy + 6);
+        ctx.stroke();
+      }
+    }
+
+    function endButtonRect() { return { x: W - 130, y: 70, w: 118, h: 34 }; }
+
+    function drawHUD() {
+      const ac = ACC();
+      const m = mult();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = ac;
+      ctx.font = 'bold 22px sans-serif';
+      ctx.fillText(mode === 'bots' ? 'Ты: ' + score : 'Очки: ' + score, 12, 40);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = '13px sans-serif';
+      let ly = 58;
+      if (modeHasRecord(mode)) {
+        ctx.fillText('Рекорд: ' + best, 12, ly); ly += 17;
+      }
+      if (mode === 'bots' && bots.length) {
+        let hx = 12;
+        ctx.font = '13px sans-serif';
+        for (const bt of bots) {
+          ctx.fillStyle = bt.color;
+          ctx.fillText('Бот: ' + bt.score, hx, ly);
+          hx += ctx.measureText('Бот: ' + bt.score).width + 16;
+        }
+        ly += 17;
+      }
+      ctx.fillStyle = '#ffe97a';
+      ctx.fillText('Монеты: ' + coins + ' (+' + coinReward() + ')', 12, ly); ly += 17;
+      const act = [];
+      if (effects.multTime > 0) act.push('×' + effects.multFactor + ' ' + Math.ceil(effects.multTime) + 'с');
+      if (effects.magnetTime > 0) act.push('M ' + Math.ceil(effects.magnetTime) + 'с');
+      if (effects.megaTime > 0) act.push('8 ' + Math.ceil(effects.megaTime) + 'с');
+      if (effects.turboTime > 0) act.push('T ' + Math.ceil(effects.turboTime) + 'с');
+      if (effects.lightTime > 0) act.push('Л ' + Math.ceil(effects.lightTime) + 'с');
+      if (act.length) {
+        ctx.fillStyle = '#88ff88';
+        ctx.fillText(act.join(' · '), 12, ly); ly += 17;
+      }
+      ctx.fillText('Шариков: ' + (balls.length + claw.held.length), 12, ly);
+
+      ctx.textAlign = 'right';
+      if (!CFG.time) {
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.fillText('Бесконечно', W - 12, 40);
+      } else {
+        ctx.fillStyle = timeLeft < 10 ? '#ff5555' : 'rgba(255,255,255,0.9)';
+        ctx.font = 'bold 26px sans-serif';
+        ctx.fillText(Math.ceil(timeLeft), W - 12, 40);
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.font = '13px sans-serif';
+        ctx.fillText('секунд', W - 12, 56);
+      }
+      ctx.textAlign = 'left';
+
+      if (!CFG.time) {
+        const r = endButtonRect();
+        drawButton(r.x, r.y, r.w, r.h, 'Завершить', true);
+      }
+    }
+
+    // ---------- Меню ----------
+    let menuPage = 0;
+    let menuOffset = 0;
+    let drag = null;
+
+    function arrowL() { return { x: 8, y: H / 2 - 34, w: 44, h: 68 }; }
+    function arrowR() { return { x: W - 52, y: H / 2 - 34, w: 44, h: 68 }; }
+    function dotsY() { return H - 34; }
+
+    function playBtn(cx) {
+      const w = Math.min(180, W - 40);
+      return { x: cx - w / 2, y: H - 130, w, h: 48 };
+    }
+    function shopBtnMenu() {
+      const w = Math.min(150, W - 40);
+      return { x: W / 2 - w / 2, y: H - 70, w, h: 42 };
+    }
+    function settingRow(i, cx) {
+      const w = Math.min(300, W - 60);
+      return { x: cx - w / 2, y: H / 2 - 110 + i * 48, w, h: 42 };
+    }
+    function recResetBtn(cx) {
+      const w = Math.min(180, W - 60);
+      return { x: cx - w / 2, y: H / 2 - 86, w, h: 30 };
+    }
+    function botBtn(k, cx) {
+      const w = Math.min(140, W / 2 - 30);
+      const x = k === 1 ? cx - w - 10 : cx + 10;
+      return { x, y: H / 2 + 40, w, h: 44 };
+    }
+
+    function drawPage(i, cx) {
+      const md = ALL_MODES()[i];
+      const ac = ACC();
+      ctx.textAlign = 'center';
+
+      ctx.fillStyle = ac;
+      ctx.font = 'bold 26px sans-serif';
+      ctx.fillText(md.name, cx, H / 2 - 150);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.font = '14px sans-serif';
+      ctx.fillText(md.desc, cx, H / 2 - 122);
+
+      if (modeHasRecord(md.id)) {
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.font = '13px sans-serif';
+        ctx.fillText('Рекорд: ' + bestOf(md.id), cx, H / 2 - 100);
+        const rr = recResetBtn(cx);
+        ctx.fillStyle = 'rgba(255,80,80,0.15)';
+        ctx.beginPath(); ctx.roundRect(rr.x, rr.y, rr.w, rr.h, 8); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,120,120,0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = '#ff8a8a';
+        ctx.font = '13px sans-serif';
+        ctx.fillText('Сбросить рекорд', cx, rr.y + rr.h / 2 + 4);
+      }
+
+      if (md.id === 'custom') {
+        const rows = [
+          ['Время', C_TIME_N[custom.timeIdx]],
+          ['Гравитация', C_G_NAME[custom.gravIdx]],
+          ['Бомбы', C_B_NAME[custom.bombIdx]],
+          ['Очки', '×' + C_MULT[custom.multIdx]]
+        ];
+        rows.forEach((r, ri) => drawSettingRow(settingRow(ri, cx), r[0], r[1]));
+      }
+
+      if (md.id === 'bots') {
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.font = '13px sans-serif';
+        ctx.fillText('Сколько соперников?', cx, H / 2 + 24);
+        drawButton(botBtn(1, cx).x, botBtn(1, cx).y, botBtn(1, cx).w, botBtn(1, cx).h,
+          '1 бот', botCount === 1);
+        drawButton(botBtn(3, cx).x, botBtn(3, cx).y, botBtn(3, cx).w, botBtn(3, cx).h,
+          '3 бота', botCount === 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('Победа: 1 бот +10 · 2 бота +50 · 3 бота +100 монет', cx, H / 2 + 108);
+        ctx.fillText('Шанс 5% на джекпот +500 (2 раза в сутки)', cx, H / 2 + 124);
+      }
+
+      drawButton(playBtn(cx).x, playBtn(cx).y, playBtn(cx).w, playBtn(cx).h, 'Играть', true);
+      ctx.textAlign = 'left';
+    }
+
+    function drawMenu() {
+      const ac = ACC();
+      const modes = ALL_MODES();
+      ctx.fillStyle = 'rgba(0,0,0,0.78)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = ac;
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillText('АВТОМАТ СО ЩИПЦАМИ', W / 2, 44);
+
+      ctx.fillStyle = '#ffe97a';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.fillText('Монеты: ' + coins, W / 2, 68);
+
+      for (let i = 0; i < modes.length; i++) {
+        const cx = i * W - menuOffset + W / 2;
+        if (cx < -W / 2 - 30 || cx > W + W / 2 + 30) continue;
+        drawPage(i, cx);
+      }
+
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.font = 'bold 44px sans-serif';
+      ctx.textAlign = 'center';
+      if (menuPage > 0) ctx.fillText('‹', 30, H / 2);
+      if (menuPage < modes.length - 1) ctx.fillText('›', W - 30, H / 2);
+
+      for (let i = 0; i < modes.length; i++) {
+        ctx.beginPath();
+        ctx.arc(W / 2 + (i - (modes.length - 1) / 2) * 22, dotsY(), i === menuPage ? 5 : 3.5, 0, TAU);
+        ctx.fillStyle = i === menuPage ? ac : 'rgba(255,255,255,0.3)';
+        ctx.fill();
+      }
+
+      const sb = shopBtnMenu();
+      drawButton(sb.x, sb.y, sb.w, sb.h, 'Магазин', false);
+      ctx.textAlign = 'left';
+    }
+
+    // ---------- Магазин ----------
+    function shopTabBtn(i) {
+      const perRow = 3;
+      const w = Math.min((W - 40) / perRow - 6, 110);
+      const row = (i / perRow) | 0;
+      const col = i % perRow;
+      const x = 14 + col * (w + 6);
+      return { x, y: 92 + row * 40, w, h: 34 };
+    }
+    function shopItemRow(i) {
+      const w = Math.min(340, W - 40);
+      return { x: (W - w) / 2, y: 184 + i * 52, w, h: 46 };
+    }
+    function shopBackBtn() {
+      const w = Math.min(200, W - 40), h = 46;
+      return { x: (W - w) / 2, y: H - 64, w, h };
+    }
+
+    function drawShop() {
+      const ac = ACC();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = ac;
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillText('МАГАЗИН', W / 2, 50);
+
+      ctx.fillStyle = '#ffe97a';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillText('Монеты: ' + coins, W / 2, 76);
+
+      SHOP_TABS.forEach((tab, i) => {
+        const r = shopTabBtn(i);
+        const on = shopTab === tab.id;
+        ctx.fillStyle = on ? ac + '2b' : 'rgba(255,255,255,0.07)';
+        ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+        ctx.strokeStyle = on ? ac : 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = on ? ac : 'rgba(255,255,255,0.7)';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(tab.name, r.x + r.w / 2, r.y + r.h / 2 + 4);
+      });
+
+      const items = SHOP[shopTab];
+      const maxRows = Math.floor((H - 184 - 70) / 52);
+      const visible = items.slice(0, Math.max(3, maxRows));
+      visible.forEach((it, i) => {
+        const r = shopItemRow(i);
+        const isOwned = itemOwned(it.id);
+        const isEq = (shopTab in equip) && equip[shopTab] === it.id;
+
+        ctx.fillStyle = isEq ? ac + '22' : 'rgba(255,255,255,0.06)';
+        ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+        ctx.strokeStyle = isEq ? ac : 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        const swx = r.x + 16, swy = r.y + r.h / 2;
+        if (it.anim) {
+          ctx.fillStyle = 'hsl(' + ((t * 120) % 360) + ', 85%, 60%)';
+        } else {
+          ctx.fillStyle = it.color || ac;
+        }
+        if (shopTab === 'bot' && it.colors) {
+          ctx.fillStyle = it.colors[0];
+        }
+        if (shopTab === 'bonus') {
+          if (it.id === 'bonus:gem') {
+            ctx.beginPath();
+            ctx.moveTo(swx, swy - 9); ctx.lineTo(swx + 9, swy);
+            ctx.lineTo(swx, swy + 9); ctx.lineTo(swx - 9, swy);
+            ctx.closePath(); ctx.fill();
+          } else if (it.id === 'bonus:ring') {
+            ctx.beginPath(); ctx.arc(swx, swy, 9, 0, TAU);
+            ctx.strokeStyle = ac; ctx.lineWidth = 3; ctx.stroke();
+          } else if (it.id === 'bonus:star') {
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            for (let k = 0; k < 5; k++) {
+              const a1 = -Math.PI / 2 + k * TAU / 5;
+              const a2 = a1 + TAU / 10;
+              ctx.lineTo(swx + Math.cos(a1) * 10, swy + Math.sin(a1) * 10);
+              ctx.lineTo(swx + Math.cos(a2) * 4.5, swy + Math.sin(a2) * 4.5);
+            }
+            ctx.closePath(); ctx.fill();
+          } else {
+            ctx.beginPath(); ctx.arc(swx, swy, 9, 0, TAU); ctx.fill();
+          }
+        } else if (shopTab !== 'perks' && shopTab !== 'modes') {
+          ctx.beginPath(); ctx.arc(swx, swy, 9, 0, TAU); ctx.fill();
+        } else {
+          ctx.strokeStyle = ac;
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(swx, swy, 9, 0, TAU); ctx.stroke();
+          ctx.fillStyle = ac;
+          ctx.font = 'bold 10px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(shopTab === 'perks' ? 'П' : 'Р', swx, swy + 3.5);
+        }
+
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(it.name, r.x + 34, r.y + (it.desc ? 19 : 28));
+        if (it.desc) {
+          ctx.fillStyle = 'rgba(255,255,255,0.45)';
+          ctx.font = '11px sans-serif';
+          ctx.fillText(it.desc, r.x + 34, r.y + 36);
+        }
+
+        ctx.textAlign = 'right';
+        if (isOwned || it.price === 0) {
+          ctx.fillStyle = isEq ? ac : '#88ff88';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.fillText(isEq ? 'Надето' : (isOwned ? 'Есть' : 'Бесплатно'), r.x + r.w - 14, r.y + 28);
+        } else {
+          ctx.fillStyle = coins >= it.price ? '#ffe97a' : 'rgba(255,255,255,0.35)';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.fillText(it.price + ' м.', r.x + r.w - 14, r.y + 28);
+        }
+        ctx.textAlign = 'left';
+      });
+
+      const bb = shopBackBtn();
+      drawButton(bb.x, bb.y, bb.w, bb.h, 'Назад в меню', true);
+      ctx.textAlign = 'left';
+    }
+
+    function shopTap(x, y) {
+      for (let i = 0; i < SHOP_TABS.length; i++) {
+        if (inRect(x, y, shopTabBtn(i))) { shopTab = SHOP_TABS[i].id; sTick(); return; }
+      }
+      const items = SHOP[shopTab];
+      const maxRows = Math.floor((H - 184 - 70) / 52);
+      const visible = items.slice(0, Math.max(3, maxRows));
+      for (let i = 0; i < visible.length; i++) {
+        if (inRect(x, y, shopItemRow(i))) {
+          const it = visible[i];
+          if (itemOwned(it.id)) {
+            if (shopTab in equip) {
+              equip[shopTab] = it.id;
+              saveAccount();
+              sTick();
+            }
+          } else if (it.price === 0) {
+            owned.push(it.id);
+            if (shopTab in equip) equip[shopTab] = it.id;
+            saveAccount();
+            sBuy();
+          } else if (coins >= it.price) {
+            coins -= it.price;
+            owned.push(it.id);
+            if (shopTab in equip) equip[shopTab] = it.id;
+            saveAccount();
+            sBuy();
+          } else {
+            sFail();
+          }
+          return;
+        }
+      }
+      if (inRect(x, y, shopBackBtn())) { state = 'MODES'; }
+    }
+
+    let overCoinsDone = false;
+    let overEarned = 0;
+
+    function drawOverScreen() {
+      const ac = ACC();
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+
+      if (!overCoinsDone) {
+        overCoinsDone = true;
+        let earned = coinReward();
+        jackpotWon = false;
+        let didWin = false;
+        if (mode === 'bots') {
+          const win = score > Math.max.apply(null, bots.map(b => b.score).concat([0]));
+          didWin = win;
+          if (win && Math.random() < 0.05 && jackpotToday() < 2) {
+            earned += 500;
+            jackpotUse();
+            jackpotWon = true;
+          }
+        }
+        coins += earned;
+        saveAccount();
+        overEarned = earned;
+        if (jackpotWon) {
+          sWin();
+          vibrate(300);
+        } else if (didWin) {
+          sWin();
+        } else {
+          sCoin();
+        }
+      }
+
+      if (mode === 'bots') {
+        const list = [{ name: 'Ты', v: score, me: true }];
+        bots.forEach((bt, i) => list.push({ name: 'Бот ' + (i + 1), v: bt.score, color: bt.color }));
+        list.sort((a, b) => b.v - a.v);
+
+        ctx.fillStyle = list[0].me ? ac : 'rgba(255,255,255,0.9)';
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillText(list[0].me ? 'ТЫ ПОБЕДИЛ!' : 'ПОБЕДИЛ ' + list[0].name.toUpperCase(), W / 2, H / 2 - 120);
+
+        ctx.font = '16px sans-serif';
+        list.forEach((e, i) => {
+          const yy = H / 2 - 76 + i * 26;
+          ctx.fillStyle = e.me ? ac : (e.color || 'rgba(255,255,255,0.8)');
+          ctx.fillText((i + 1) + '. ' + e.name + ': ' + e.v + (e.me ? ' ← ты' : ''), W / 2, yy);
+        });
+      } else {
+        ctx.fillStyle = ac;
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillText(mode === 'endless' ? 'РАУНД ЗАВЕРШЁН' : 'ВРЕМЯ ВЫШЛО', W / 2, H / 2 - 90);
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.font = '17px sans-serif';
+        const md = findMode(mode);
+        ctx.fillText((md ? md.name : mode) + ' · Очки: ' + score, W / 2, H / 2 - 50);
+        if (modeHasRecord(mode)) {
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.font = '15px sans-serif';
+          ctx.fillText('Рекорд режима: ' + bestOf(mode), W / 2, H / 2 - 24);
+        }
+      }
+
+      ctx.fillStyle = '#ffe97a';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText('+' + overEarned + ' монет', W / 2, H / 2 + 6);
+      if (jackpotWon) {
+        ctx.fillStyle = '#ff44dd';
+        ctx.font = 'bold 18px sans-serif';
+        ctx.fillText('ДЖЕКПОТ! +500 (2 раза в сутки)', W / 2, H / 2 + 30);
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = '13px sans-serif';
+      ctx.fillText('Шариков из клешни: ' + ballsCollected + ' · Всего монет: ' + coins, W / 2, H / 2 + 50);
+
+      const w = Math.min(200, W - 40), h = 46;
+      drawButton((W - w) / 2, H / 2 + 70, w, h, 'Ещё раз', true);
+      drawButton((W - w) / 2, H / 2 + 130, w, h, 'В меню', false);
+      ctx.textAlign = 'left';
+    }
+
+    function draw(dt) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      if (state === 'MODES') {
+        drawMenu();
+        return;
+      }
+      if (state === 'SHOP') {
+        drawShop();
+        return;
+      }
+
+      drawHoles();
+      drawBalls();
+      drawDying(dt);
+      drawClawArm(claw, clawTipY());
+      if (mode === 'bots') {
+        for (const bt of bots) drawClawArm(bt, botTipY(bt), bt.color);
+      }
+
+      drawHUD();
+      drawMoveButtons();
+      drawSoundButton();
+
+      if (state === 'OVER') {
+        drawOverScreen();
+      } else if (state === 'PLAY') {
+        if (hintTimer > 0 && Math.floor(t * 2.5) % 2 === 0) {
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.font = '14px sans-serif';
+          ctx.fillText('Кнопки ‹ › — двигать. Тап — захват. Остерегайся ☠', W / 2, H - 20);
+          ctx.textAlign = 'left';
+        }
+      }
+    }
+
+    // ---------- Управление ----------
+    function inRect(x, y, r) {
+      return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+    }
+
+    function cycleCustom(i, dir) {
+      const max = [C_TIME.length, C_G.length, C_BOMB.length, C_MULT.length][i];
+      const keys = ['timeIdx', 'gravIdx', 'bombIdx', 'multIdx'];
+      custom[keys[i]] = (custom[keys[i]] + dir + max) % max;
+    }
+
+    function handleDown(x, y) {
+      if (state === 'SHOP') {
+        shopTap(x, y);
+        return;
+      }
+
+      if (state === 'MODES') {
+        const modes = ALL_MODES();
+        if (menuPage > 0 && inRect(x, y, arrowL())) { menuPage--; sTick(); return; }
+        if (menuPage < modes.length - 1 && inRect(x, y, arrowR())) { menuPage++; sTick(); return; }
+
+        const curMode = modes[menuPage] ? modes[menuPage].id : 'classic';
+        if (modeHasRecord(curMode) && inRect(x, y, recResetBtn(W / 2))) {
+          setBestOf(curMode, 0);
+          sTick();
+          return;
+        }
+
+        if (curMode === 'custom') {
+          for (let i = 0; i < 4; i++) {
+            const rect = settingRow(i, W / 2);
+            if (inRect(x, y, rect)) {
+              cycleCustom(i, x < rect.x + rect.w / 2 ? -1 : 1);
+              sTick();
+              return;
+            }
+          }
+        }
+
+        if (curMode === 'bots') {
+          if (inRect(x, y, botBtn(1, W / 2))) { botCount = 1; sTick(); return; }
+          if (inRect(x, y, botBtn(3, W / 2))) { botCount = 3; sTick(); return; }
+        }
+
+        if (inRect(x, y, playBtn(W / 2))) {
+          mode = curMode;
+          if (menuPage >= modes.length) menuPage = modes.length - 1;
+          startRound();
+          return;
+        }
+
+        if (inRect(x, y, shopBtnMenu())) {
+          state = 'SHOP';
+          sTick();
+          return;
+        }
+
+        drag = { startX: x, startOffset: menuOffset };
+        return;
+      }
+
+      if (state === 'OVER') {
+        const w = Math.min(200, W - 40), h = 46;
+        if (inRect(x, y, { x: (W - w) / 2, y: H / 2 + 70, w, h })) { startRound(); return; }
+        if (inRect(x, y, { x: (W - w) / 2, y: H / 2 + 130, w, h })) { state = 'MODES'; sTick(); return; }
+        return;
+      }
+
+      if (state === 'PLAY') {
+        if (!CFG.time && inRect(x, y, endButtonRect())) {
+          releaseHeld();
+          endRound();
+          return;
+        }
+        if (inRect(x, y, soundBtn())) {
+          soundOn = !soundOn;
+          store.set('clawSound', soundOn ? '1' : '0');
+          if (soundOn) sTick();
+          return;
+        }
+        if (inRect(x, y, btnL())) { moveDir = -1; return; }
+        if (inRect(x, y, btnR())) { moveDir = 1; return; }
+
+        if (!claw.busy) {
+          claw.busy = true;
+          claw.state = 'DESCEND';
+          claw.t = 0;
+          claw.grabbed = false;
+          claw.released = false;
+          sMiss();
+        }
+      }
+    }
+
+    function handleMove(x) {
+      if (state === 'PLAY') {
+        if (moveDir === 0) {
+          clawTargetX = Math.max(40, Math.min(W - 40, x));
+        }
+      } else if (state === 'MODES' && drag) {
+        const modes = ALL_MODES();
+        menuOffset = Math.max(0, Math.min((modes.length - 1) * W,
+          drag.startOffset - (x - drag.startX)));
+      }
+    }
+
+    function handleUp() {
+      moveDir = 0;
+      if (state === 'MODES' && drag) {
+        const dx = (drag.startOffset - menuOffset);
+        const modes = ALL_MODES();
+        if (dx > 60 && menuPage < modes.length - 1) menuPage++;
+        else if (dx < -60 && menuPage > 0) menuPage--;
+        menuPage = Math.min(menuPage, modes.length - 1);
+      }
+      drag = null;
+    }
+
+    function endRound() {
+      overCoinsDone = false;
+      overEarned = 0;
+      state = 'OVER';
+    }
+
+    function getXY(e) {
+      if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      if (e.changedTouches && e.changedTouches.length) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+      return { x: e.clientX, y: e.clientY };
+    }
+
+    let lastTouch = 0;
+
+    document.addEventListener('touchstart', e => {
+      lastTouch = Date.now();
+      initAudio();
+      e.preventDefault();
+      const p = getXY(e);
+      handleDown(p.x, p.y);
+    }, { passive: false });
+
+    document.addEventListener('touchmove', e => {
+      e.preventDefault();
+      const p = getXY(e);
+      handleMove(p.x);
+    }, { passive: false });
+
+    document.addEventListener('touchend', e => {
+      e.preventDefault();
+      handleUp();
+    }, { passive: false });
+    document.addEventListener('touchcancel', handleUp);
+
+    window.addEventListener('mousedown', e => {
+      if (Date.now() - lastTouch < 800) return;
+      initAudio();
+      handleDown(e.clientX, e.clientY);
+    });
+    window.addEventListener('mousemove', e => {
+      if (Date.now() - lastTouch < 800) return;
+      handleMove(e.clientX);
+    });
+    window.addEventListener('mouseup', handleUp);
+
+    function startRound() {
+      buildCFG();
+      buildCups();
+      balls.length = 0; dying.length = 0; floaters.length = 0;
+      claw.held = []; claw.busy = false; claw.state = 'IDLE'; claw.y = 30;
+      claw.grabbed = false; claw.released = false;
+      moveDir = 0;
+      makeBots();
+      score = 0;
+      ballsCollected = 0;
+      jackpotWon = false;
+      overCoinsDone = false;
+      overEarned = 0;
+      lastSecond = -1;
+      timeLeft = CFG.time || 0;
+      effects.multFactor = 1; effects.multTime = 0;
+      effects.magnetTime = effects.megaTime = effects.turboTime = effects.lightTime = 0;
+      hintTimer = 5;
+      best = bestOf(mode);
+      for (let i = 0; i < TARGET_BALLS; i++) {
+        if (i % 2 === 0) {
+          balls.push(makeBall(Math.random() * W, Math.random() * H * 0.55 + H * 0.3));
+        } else {
+          balls.push(makeBall());
+        }
+      }
+      state = 'PLAY';
+    }
+
+    // ---------- Главный цикл ----------
+    let spawnAcc = 0, bonusAcc = 0;
+    let last = performance.now();
+
+    function animate(now) {
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      t += dt;
+
+      if (state === 'MODES' && !drag) {
+        menuOffset += (menuPage * W - menuOffset) * Math.min(1, dt * 10);
+      }
+
+      if (state === 'PLAY') {
+        if (CFG.time) {
+          timeLeft -= dt;
+          // Тиканье на последних 5 секундах
+          const sec = Math.ceil(timeLeft);
+          if (sec <= 5 && sec >= 1 && sec !== lastSecond) {
+            lastSecond = sec;
+            sTick();
+          }
+        }
+        if (hintTimer > 0) hintTimer -= dt;
+
+        for (const k of ['multTime', 'magnetTime', 'megaTime', 'turboTime', 'lightTime']) {
+          if (effects[k] > 0) effects[k] = Math.max(0, effects[k] - dt);
+        }
+        if (effects.multTime === 0) effects.multFactor = 1;
+
+        spawnAcc += dt;
+        while (spawnAcc > SPAWN_INTERVAL) {
+          spawnAcc -= SPAWN_INTERVAL;
+          let spawned = 0;
+          while (balls.length + claw.held.length < TARGET_BALLS && spawned < SPAWN_PER_PORTION) {
+            balls.push(makeBall());
+            spawned++;
+          }
+        }
+        if (balls.length > TARGET_BALLS + 20) {
+          const idx = balls.findIndex(b => !b.bonusId);
+          if (idx >= 0) balls.splice(idx, 1);
+        }
+
+        bonusAcc += dt;
+        const bonusEvery = hasPerk('perk:freq') ? BONUS_EVERY / 2 : BONUS_EVERY;
+        if (bonusAcc > bonusEvery) {
+          bonusAcc = 0;
+          if (balls.filter(b => b.bonusId).length < BONUS_MAX_ON_SCREEN) spawnBonus();
+        }
+
+        updateClaw(dt);
+        updateBots(dt);
+        integrate(dt);
+        collide();
+        walls();
+
+        if (CFG.time && timeLeft <= 0) {
+          timeLeft = 0;
+          releaseHeld();
+          for (const bt of bots) bt.held = [];
+          endRound();
+        }
+      }
+
+      updateFloaters(dt);
+      draw(dt);
+      requestAnimationFrame(animate);
+    }
+
+    resize();
+    buildCups();
+    for (let i = 0; i < TARGET_BALLS; i++) {
+      balls.push(makeBall(Math.random() * W, Math.random() * H * 0.55 + H * 0.3));
+    }
+
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
